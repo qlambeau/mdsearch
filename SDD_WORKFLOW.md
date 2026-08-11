@@ -83,6 +83,17 @@ A feature is ready for code generation when:
 - Tasks include dependencies and concrete verification checks.
 - The artifacts agree with one another and form a complete trace from story to test.
 
+## Skill Mapping
+
+| Workflow step | Skill | Output |
+| --- | --- | --- |
+| Product intent | `create-prd` | `specs/prds/PRD-NNN.md` |
+| Story refinement | `refine-user-stories` | `user-story.md` |
+| Executable behavior | `user-story-to-gherkin` | `scenarios.feature` |
+| Observable contract | `create-requirements` | `requirements.md` |
+| Technical approach | `create-design` | `design.md` and related ADRs |
+| Implementation plan | `create-tasks` | `tasks.md` |
+
 ## Implementation Packet
 
 Give the code-generation agent the complete feature context:

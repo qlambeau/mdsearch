@@ -20,7 +20,7 @@ environment provides it.
 3. **Formulate executable behavior** with `user-story-to-gherkin`.
    - A canonical story produces `specs/NNN-feature-slug/scenarios.feature`.
    - Ambiguity must be resolved before scenarios are written.
-4. **Complete task specifications** using the feature templates.
+4. **Complete task specifications** with `create-requirements`, `create-design`, and `create-tasks`.
    - `requirements.md` defines observable behavior and contracts.
    - `design.md` defines the technical approach and risks.
    - `tasks.md` defines ordered implementation and verification work.
@@ -59,8 +59,9 @@ The v1 skills do not create or require these files.
 ## Adoption
 
 The scaffold script is self-contained: it embeds the workflow skills and writes
-them to `.agents/skills/` inside the target project (create-prd,
-refine-user-stories, user-story-to-gherkin, and the optional qmd bootstrap).
+them to `.agents/skills/` inside the target project (`create-prd`,
+`refine-user-stories`, `user-story-to-gherkin`, `create-requirements`,
+`create-design`, `create-tasks`, and the optional qmd bootstrap).
 Use `specs/templates/` when creating new artifacts. Keep the kit's templates
 available to the skills; do not assume this workspace is the target project.
 
