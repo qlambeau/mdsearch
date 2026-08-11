@@ -104,9 +104,30 @@ SPEC  →  CONTRACT  →  RED TEST  →  IMPLEMENTATION  →  GREEN  →  REFACT
 
 ## 3. Repository and directory organization
 
-### 3.1 The canonical workspace
+### 3.1 Repository and Rust workspace layout
 
-Layering is enforced by the compiler, not by convention. A layer is a crate; an illegal dependency is a compile error.
+This repository currently contains the SDD Workflow Kit and uses the following
+specification layout:
+
+```
+.
+├── AGENTS.md
+├── README.md
+├── SDD_WORKFLOW.md
+├── .agents/
+│   └── skills/
+└── specs/
+    ├── CONSTITUTION.md
+    ├── prds/
+    ├── adr/
+    ├── templates/
+    ├── NNN-feature-slug/
+    └── archive/
+```
+
+When the Rust implementation workspace is introduced, it follows the layout
+below. Layering is enforced by the compiler, not by convention. A layer is a
+crate; an illegal dependency is a compile error.
 
 ```
 .
@@ -116,11 +137,12 @@ Layering is enforced by the compiler, not by convention. A layer is a crate; an 
 ├── rustfmt.toml
 ├── clippy.toml
 ├── deny.toml                   # cargo-deny: licences, advisories, bans
-├── CONSTITUTION.md             # this file
-├── docs/
-│   ├── specs/                  # SPEC-*.md — the source of truth for behaviour
-│   ├── adr/                    # NNNN-title.md — architecture decision records
-│   └── glossary.md             # ubiquitous language (R-NAM-10)
+├── specs/
+│   ├── CONSTITUTION.md         # this file
+│   ├── prds/                   # PRD-NNN.md — product requirements
+│   ├── adr/                    # ADR-NNN.md — architecture decisions
+│   ├── templates/              # source templates, not active specifications
+│   └── NNN-feature-slug/        # feature packet and executable scenarios
 ├── crates/
 │   ├── domain/                 # layer 0 — pure. zero I/O, zero async, zero frameworks.
 │   ├── application/            # layer 1 — use cases + PORT TRAITS. depends on domain only.
@@ -406,7 +428,7 @@ Testing is not a phase; it is the specification made executable. In an agentic w
 - **R-DOC-04** — Public API docs include a runnable `# Examples` block (R-TST-21).
 - **R-DOC-05** — Comments explain *why*, never *what*. If code needs a comment to explain what it does, rename things until it doesn't.
 - **R-DOC-06** — Each crate's `lib.rs` carries a `//!` module doc stating the crate's responsibility and its layer.
-- **R-DOC-07** — Architectural decisions are recorded as ADRs in `docs/adr/`, numbered, immutable once accepted, superseded rather than edited.
+- **R-DOC-07** — Architectural decisions are recorded as ADRs in `specs/adr/`, numbered, immutable once accepted, superseded rather than edited.
 - **R-DOC-08** — `TODO`/`FIXME` MUST reference a tracked issue: `// TODO(#412): ...`. Untracked TODOs are forbidden.
 
 ---
@@ -494,4 +516,4 @@ A unit of work is complete only when **every** box is checked, verified by obser
 
 ## 15. Amendment
 
-This constitution is version-controlled and amended by pull request with an accompanying ADR stating the problem, the proposed rule change, and the migration path for existing code. Rules are added with new IDs; retired rules are marked `RETIRED` in place. Agents MUST NOT amend this document.
+This constitution is version-controlled and amended by pull request with an accompanying ADR stating the problem, the proposed rule change, and the migration path for existing code. Rules are added with new IDs; retired rules are marked `RETIRED` in place. Agents MUST NOT amend this document. The repository-layout amendment recorded in `ADR-002` is a one-time, explicit human-authorized deviation from that prohibition and does not establish a standing exception.

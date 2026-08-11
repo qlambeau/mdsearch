@@ -45,14 +45,9 @@ than silently choosing.
 - Do not add a crate-level dependency, workspace member, or architectural layer without explicit human approval in the current session.
 - Write tests before implementation and do not weaken tests, delete assertions, add `#[ignore]`, or loosen lints to make a build pass.
 - Do not write `unsafe` without the constitution's required human-authored ADR process.
-- Do not amend `specs/CONSTITUTION.md` as an agent.
+- Do not amend `specs/CONSTITUTION.md` without explicit current-session human authorization and an accompanying ADR; `ADR-002` records the authorized repository-layout exception for this session.
 - A Rust unit of work is incomplete until the constitution's required tooling and Definition of Done gates have been executed and observed.
 
-The constitution's canonical Rust layout example uses root `CONSTITUTION.md`,
-`docs/specs/`, and `docs/adr/`, while this workflow kit currently uses
-`specs/CONSTITUTION.md`, `specs/`, and `specs/adr/`. Treat this as an unresolved
-repository-layout conflict. Do not restructure or amend either authority
-silently; resolve it with an explicit human decision before Rust implementation.
 
 The complete implementation packet includes `specs/CONSTITUTION.md`.
 

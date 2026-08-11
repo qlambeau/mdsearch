@@ -26,10 +26,6 @@ write tests before implementation, and do not add dependencies, workspace
 members, layers, unsafe code, or lint suppressions without the required approval
 and justification.
 
-Rust implementation is blocked until the repository-layout conflict between the
-constitution's `docs/specs` and `docs/adr` example and this kit's `specs/` and
-`specs/adr/` layout is resolved by an explicit human decision.
-
 This slice includes the SQLite collection foundation, database-path handling,
 name validation, transactional persistence, CLI output, and acceptance tests.
 It does not implement file ingestion, lexical indexing, vectorization with
