@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-//! Composition root and CLI application for `kv`.
+//! Composition root and CLI application for `mdsearch`.
 
 mod cli;
 mod error;

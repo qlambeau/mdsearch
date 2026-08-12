@@ -4,7 +4,7 @@
 
 This repository is an SDD Workflow Kit for turning product intent into
 implementation-ready feature specifications. The current product context is
-the `kv` Markdown Knowledge Search CLI described by `PRD-001`.
+the `mdsearch` Markdown Knowledge Search CLI described by `PRD-001`.
 
 ## Read First
 
@@ -91,7 +91,7 @@ template values do not reserve those numbers.
 
 ## Product Constraints
 
-Preserve these approved `kv` constraints unless the PRD or an ADR explicitly
+Preserve these approved `mdsearch` constraints unless the PRD or an ADR explicitly
 changes them:
 
 - Local-first and offline operation are the defaults.

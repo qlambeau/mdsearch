@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Debug, Parser)]
-#[command(name = "kv", version, about = "Local markdown knowledge search")]
+#[command(name = "mdsearch", version, about = "Local markdown knowledge search")]
 pub(crate) struct Cli {
     #[command(subcommand)]
     pub(crate) command: Command,

@@ -10,7 +10,7 @@ use kv_store_sqlite::SqliteCollectionStore;
 use crate::AppError;
 use crate::cli::{Cli, CollectionCommand, Command};
 
-/// Executes one `kv` CLI invocation with an injected home directory.
+/// Executes one `mdsearch` CLI invocation with an injected home directory.
 ///
 /// # Errors
 ///
@@ -36,8 +36,8 @@ fn create_collection(
     home_directory: &Path,
 ) -> Result<String, AppError> {
     let name = CollectionName::try_from(raw_name)?;
-    let database_path =
-        database_override.unwrap_or_else(|| home_directory.join(".kv").join("collections.db"));
+    let database_path = database_override
+        .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
     let store = SqliteCollectionStore::open(&database_path)?;
     let mut use_case = CreateCollection::new(store, SystemClock);
     let created_name = use_case.execute(name)?;

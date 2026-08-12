@@ -114,7 +114,7 @@ a behavioral change, update and approve the affected specifications before
 changing the code. Rust implementation must also satisfy the normative rules and
 verification gates in `specs/CONSTITUTION.md`.
 
-## Example Slice Order For `kv`
+## Example Slice Order For `mdsearch`
 
 1. Collection lifecycle: create, list, and destroy named collections.
 2. Ingestion and exact retrieval: add files, update a collection, and retrieve a complete file.

@@ -22,7 +22,7 @@ features will use. The implementation must preserve the approved behavior in
 
 - The application is a local-first Rust single binary.
 - All Rust implementation must comply with the normative rules and gates in `specs/CONSTITUTION.md`.
-- The default database is `~/.kv/collections.db`, with `--database PATH` as an override.
+- The default database is `~/.mdsearch/collections.db`, with `--database PATH` as an override.
 - All collections for a database are stored in one file.
 - Collection creation must work without network access or external services.
 - A failed create operation must not leave a partial collection.
@@ -40,7 +40,7 @@ binary. The selected approach is recorded in `ADR-001`.
 
 The create flow is:
 
-1. Parse `kv collection create NAME` and the optional `--database PATH`.
+1. Parse `mdsearch collection create NAME` and the optional `--database PATH`.
 2. Resolve the default or explicit database path.
 3. Trim and validate the collection name before creating or modifying a database.
 4. Create missing parent directories and initialize the SQLite schema when needed.
@@ -85,7 +85,7 @@ their own feature designs and performance validation.
 | Component | Responsibility | Depends on |
 | --- | --- | --- |
 | CLI command handler | Accept the create command, pass inputs to the application flow, and select the human-readable result | CLI argument parser |
-| Database path resolver | Select `~/.kv/collections.db` or the value supplied by `--database PATH` | User home directory and filesystem |
+| Database path resolver | Select `~/.mdsearch/collections.db` or the value supplied by `--database PATH` | User home directory and filesystem |
 | Collection name validator | Trim the input, reject invalid characters and empty values, and produce the canonical comparison key | Unicode and path-character rules |
 | Database initializer | Create parent directories when needed, open the SQLite file, and apply the collection schema | SQLite integration |
 | Collection repository | Check uniqueness and insert the collection within a transaction | Database initializer |

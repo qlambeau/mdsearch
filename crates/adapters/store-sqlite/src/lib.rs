@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-//! `SQLite` adapter for the `kv` application ports.
+//! `SQLite` adapter for the `mdsearch` application ports.
 
 use std::error::Error;
 use std::fs;

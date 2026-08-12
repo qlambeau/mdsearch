@@ -1,4 +1,4 @@
-//! Acceptance tests for the `kv collection create` command.
+//! Acceptance tests for the `mdsearch collection create` command.
 
 use std::error::Error;
 use std::process::Command;
@@ -13,10 +13,10 @@ use kv_app::run;
 fn creates_a_collection_at_the_default_database_path() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
 
-    let output = run(["kv", "collection", "create", "Notes"], home.path())?;
+    let output = run(["mdsearch", "collection", "create", "Notes"], home.path())?;
 
     assert!(output.contains("Notes"));
-    assert!(home.path().join(".kv/collections.db").exists());
+    assert!(home.path().join(".mdsearch/collections.db").exists());
 
     Ok(())
 }
@@ -32,7 +32,7 @@ fn creates_a_collection_at_the_explicit_database_path() -> Result<(), Box<dyn Er
 
     let output = run(
         [
-            "kv",
+            "mdsearch",
             "collection",
             "create",
             "Project Notes",
@@ -44,7 +44,7 @@ fn creates_a_collection_at_the_explicit_database_path() -> Result<(), Box<dyn Er
 
     assert!(output.contains("Project Notes"));
     assert!(database_path.exists());
-    assert!(!home.path().join(".kv/collections.db").exists());
+    assert!(!home.path().join(".mdsearch/collections.db").exists());
 
     Ok(())
 }
@@ -54,9 +54,9 @@ fn creates_a_collection_at_the_explicit_database_path() -> Result<(), Box<dyn Er
 fn rejects_a_case_insensitive_duplicate_across_cli_runs() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
 
-    run(["kv", "collection", "create", "Notes"], home.path())?;
+    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
 
-    let error = run(["kv", "collection", "create", "notes"], home.path())
+    let error = run(["mdsearch", "collection", "create", "notes"], home.path())
         .err()
         .ok_or_else(|| std::io::Error::other("the duplicate collection command should fail"))?;
 
@@ -75,12 +75,12 @@ fn rejects_a_case_insensitive_duplicate_across_cli_runs() -> Result<(), Box<dyn 
 fn rejects_invalid_collection_names(#[case] name: &str) -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
 
-    let error = run(["kv", "collection", "create", name], home.path())
+    let error = run(["mdsearch", "collection", "create", name], home.path())
         .err()
         .ok_or_else(|| std::io::Error::other("an invalid collection name should fail"))?;
 
     assert!(error.to_string().contains("collection name"));
-    assert!(!home.path().join(".kv/collections.db").exists());
+    assert!(!home.path().join(".mdsearch/collections.db").exists());
 
     Ok(())
 }
@@ -98,7 +98,7 @@ fn reports_an_inaccessible_database_without_partial_collection() -> Result<(), B
 
     let error = run(
         [
-            "kv",
+            "mdsearch",
             "collection",
             "create",
             "Notes",
@@ -120,7 +120,7 @@ fn reports_an_inaccessible_database_without_partial_collection() -> Result<(), B
 #[test]
 fn binary_reports_success_for_collection_creation() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
-    let output = Command::new(env!("CARGO_BIN_EXE_kv"))
+    let output = Command::new(env!("CARGO_BIN_EXE_mdsearch"))
         .args(["collection", "create", "Notes"])
         .env("HOME", home.path())
         .output()?;
@@ -135,7 +135,7 @@ fn binary_reports_success_for_collection_creation() -> Result<(), Box<dyn Error>
 #[test]
 fn binary_reports_invalid_name_failure() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
-    let output = Command::new(env!("CARGO_BIN_EXE_kv"))
+    let output = Command::new(env!("CARGO_BIN_EXE_mdsearch"))
         .args(["collection", "create", "Notes/2026"])
         .env("HOME", home.path())
         .output()?;
@@ -149,7 +149,7 @@ fn binary_reports_invalid_name_failure() -> Result<(), Box<dyn Error>> {
 /// Covers: failure when the process has no home directory.
 #[test]
 fn binary_reports_missing_home_directory() -> Result<(), Box<dyn Error>> {
-    let output = Command::new(env!("CARGO_BIN_EXE_kv"))
+    let output = Command::new(env!("CARGO_BIN_EXE_mdsearch"))
         .args(["collection", "create", "Notes"])
         .env_remove("HOME")
         .output()?;

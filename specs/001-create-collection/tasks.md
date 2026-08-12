@@ -41,7 +41,7 @@ schema.
 
 - [x] **TASK-002:** Implement database-path resolution and initialization.
   - Depends on: TASK-001
-  - Verification: Unit and integration checks cover the default `~/.kv/collections.db` path, the `--database PATH` override, missing parent-directory creation, and semantic failure when the path cannot be resolved or accessed.
+  - Verification: Unit and integration checks cover the default `~/.mdsearch/collections.db` path, the `--database PATH` override, missing parent-directory creation, and semantic failure when the path cannot be resolved or accessed.
 
 - [x] **TASK-003:** Implement collection-name normalization and validation.
   - Depends on: None
@@ -51,7 +51,7 @@ schema.
   - Depends on: TASK-001, TASK-002, TASK-003
   - Verification: Integration checks confirm the collection fields, unique comparison key, empty initial state, persistence, duplicate rejection, and rollback without partial collection state.
 
-- [x] **TASK-005:** Wire the `kv collection create NAME` command and optional `--database PATH` flag.
+- [x] **TASK-005:** Wire the `mdsearch collection create NAME` command and optional `--database PATH` flag.
   - Depends on: TASK-002, TASK-003, TASK-004
   - Verification: CLI checks confirm successful creation, retained-name confirmation, semantic invalid-name and duplicate failures, database failure reporting, and no behavior outside `REQ-001`.
 

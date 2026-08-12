@@ -5,17 +5,17 @@ Feature: Create an empty named collection
   So that I can organize markdown files for later indexing and retrieval
 
   Scenario: Initialize the default database and create the first collection
-    Given no database exists at "~/.kv/collections.db"
+    Given no database exists at "~/.mdsearch/collections.db"
     And "Notes" is an unused valid collection name
-    When I run `kv collection create Notes`
-    Then the database is initialized at "~/.kv/collections.db"
+    When I run `mdsearch collection create Notes`
+    Then the database is initialized at "~/.mdsearch/collections.db"
     And an empty collection named "Notes" exists
     And the human-readable output confirms creation of "Notes"
 
   Scenario: Create a collection in an explicitly selected database
     Given no database exists at "/custom/path/collections.db"
     And "Project Notes" is an unused valid collection name
-    When I run `kv collection create "Project Notes" --database "/custom/path/collections.db"`
+    When I run `mdsearch collection create "Project Notes" --database "/custom/path/collections.db"`
     Then the database is initialized at "/custom/path/collections.db"
     And an empty collection named "Project Notes" exists in that database
     And the human-readable output confirms creation of "Project Notes"
@@ -34,7 +34,7 @@ Feature: Create an empty named collection
 
   Scenario: Reject a case-insensitive duplicate collection name
     Given an empty collection named "Notes" already exists
-    When I run `kv collection create notes`
+    When I run `mdsearch collection create notes`
     Then the operation is rejected
     And the output communicates that the collection name is already in use
     And the existing collection retains the display name "Notes"
@@ -59,7 +59,7 @@ Feature: Create an empty named collection
   Scenario: Fail without a partial collection when the database is inaccessible
     Given the selected database cannot be created or opened
     And "Notes" is an unused valid collection name
-    When I run `kv collection create Notes --database "/inaccessible/collections.db"`
+    When I run `mdsearch collection create Notes --database "/inaccessible/collections.db"`
     Then the operation fails
     And the output communicates that the database could not be accessed
     And no partial "Notes" collection exists

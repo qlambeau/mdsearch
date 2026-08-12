@@ -3,7 +3,7 @@ use thiserror::Error;
 use kv_application::{CollectionStoreError, CreateCollectionError};
 use kv_domain::CollectionNameError;
 
-/// Describes a user-visible failure from the `kv` CLI.
+/// Describes a user-visible failure from the `mdsearch` CLI.
 #[derive(Debug, Error)]
 pub enum AppError {
     /// Clap rejected the command-line arguments.

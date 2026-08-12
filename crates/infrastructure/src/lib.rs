@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-//! Cross-cutting infrastructure for the `kv` application.
+//! Cross-cutting infrastructure for the `mdsearch` application.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

@@ -37,11 +37,11 @@ can be performed later through EPIC-002.
 - The first-created spelling is retained for display.
 - Creating a duplicate name is rejected without changing the existing collection.
 - If no database exists, it is initialized automatically.
-- The default database path is `~/.kv/collections.db`.
+- The default database path is `~/.mdsearch/collections.db`.
 - `--database PATH` overrides the default database path.
 - The collection persists across CLI runs.
 - If the database cannot be created or opened, the operation fails without creating a partial collection.
-- The command is `kv collection create NAME`.
+- The command is `mdsearch collection create NAME`.
 - Successful creation produces a human-readable confirmation containing the collection name.
 - Error output must communicate the relevant failure semantically, but exact wording is not part of this story's contract.
 
@@ -49,9 +49,9 @@ can be performed later through EPIC-002.
 
 | Example | Given | When | Expected outcome |
 | --- | --- | --- | --- |
-| EX-001 | No database exists and `Notes` is an unused valid name | I run `kv collection create Notes` | The database and empty `Notes` collection are created, and the name is shown in a confirmation |
-| EX-002 | A custom database path is supplied and `Project Notes` is unused | I run `kv collection create "Project Notes" --database PATH` | The empty collection is created in the specified database |
-| EX-003 | A collection named `Notes` already exists | I run `kv collection create notes` | The operation is rejected and the existing collection is unchanged |
+| EX-001 | No database exists and `Notes` is an unused valid name | I run `mdsearch collection create Notes` | The database and empty `Notes` collection are created, and the name is shown in a confirmation |
+| EX-002 | A custom database path is supplied and `Project Notes` is unused | I run `mdsearch collection create "Project Notes" --database PATH` | The empty collection is created in the specified database |
+| EX-003 | A collection named `Notes` already exists | I run `mdsearch collection create notes` | The operation is rejected and the existing collection is unchanged |
 | EX-004 | The name is empty, whitespace-only, or contains a path separator or control character | I run the create command | The operation is rejected and no collection is created |
 | EX-005 | The database cannot be created or opened | I run the create command with a valid name | The operation fails without leaving a partial collection |
 | EX-006 | A collection was created in an earlier CLI run | I run the CLI again | The collection remains available |

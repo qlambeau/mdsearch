@@ -17,8 +17,8 @@ rstest.workspace = true
 tempfile.workspace = true
 
 [[bin]]
-name = "kv"
-path = "src/bin/kv.rs"
+name = "mdsearch"
+path = "src/bin/mdsearch.rs"
 
 [lints]
 workspace = true

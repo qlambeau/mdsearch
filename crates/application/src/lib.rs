@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-//! Application use cases and ports for `kv`.
+//! Application use cases and ports for `mdsearch`.
 
 mod create_collection;
 mod error;

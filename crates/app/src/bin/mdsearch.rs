@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-//! Binary entry point for the `kv` CLI.
+//! Binary entry point for the `mdsearch` CLI.
 
 use std::io::{self, Write};
 use std::path::PathBuf;
