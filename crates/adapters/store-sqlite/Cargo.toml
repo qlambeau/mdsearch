@@ -1,0 +1,19 @@
+[package]
+name = "kv-store-sqlite"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+kv-application.workspace = true
+kv-domain.workspace = true
+rusqlite.workspace = true
+sqlite-vector-rs.workspace = true
+sqlite3_ext.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

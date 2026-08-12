@@ -1,0 +1,12 @@
+[package]
+name = "kv-infrastructure"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+kv-application.workspace = true
+kv-domain.workspace = true
+
+[lints]
+workspace = true

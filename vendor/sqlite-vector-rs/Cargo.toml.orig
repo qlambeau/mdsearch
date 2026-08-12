@@ -1,0 +1,37 @@
+[package]
+name = "sqlite-vector-rs"
+version = "0.3.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "SQLite extension providing PGVector-like native vector types with HNSW indexing"
+repository = "https://github.com/quinnjr/sqlite-vector-rs"
+keywords = ["sqlite", "vector", "hnsw", "embedding", "database"]
+categories = ["database"]
+# Large test fixtures (the LFS-tracked Shakespeare PDF; GGUF models are
+# gitignored and auto-downloaded) are not needed by crate consumers and only
+# bloat the published package.
+exclude = ["tests/fixtures/*"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["loadable_extension"]
+loadable_extension = []
+library = ["dep:rusqlite", "loadable_extension"]
+
+[dependencies]
+sqlite3_ext = "0.2"
+usearch = "2"
+arrow-array = "58"
+arrow-buffer = "58"
+arrow-ipc = "58"
+arrow-schema = "58"
+half = { version = "2", features = ["bytemuck"] }
+bytemuck = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.28", features = ["bundled", "vtab", "load_extension"], optional = true }
+
+[[bin]]
+name = "sqlite3"
+required-features = ["library"]

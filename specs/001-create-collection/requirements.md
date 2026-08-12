@@ -2,7 +2,7 @@
 id: REQ-001
 title: "Create an empty named collection requirements"
 type: feature-requirements
-status: approved
+status: implemented
 created: 2026-08-11
 updated: 2026-08-11
 owner: TBD

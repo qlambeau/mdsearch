@@ -2,7 +2,7 @@
 id: US-001
 title: "Create an empty named collection"
 type: user-story
-status: approved
+status: implemented
 created: 2026-08-11
 updated: 2026-08-11
 owner: TBD

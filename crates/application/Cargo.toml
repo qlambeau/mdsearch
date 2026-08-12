@@ -1,0 +1,12 @@
+[package]
+name = "kv-application"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+kv-domain.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

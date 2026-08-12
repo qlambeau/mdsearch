@@ -2,7 +2,7 @@
 id: DES-001
 title: "Create an empty named collection design"
 type: feature-design
-status: approved
+status: implemented
 created: 2026-08-11
 updated: 2026-08-11
 owner: TBD
@@ -165,7 +165,7 @@ initialization, but no partially created collection may remain.
 
 ## Risks And Open Decisions
 
-- `ADR-001` remains a draft until the selected storage and local query stack are reviewed and approved.
+- `ADR-001` records the approved storage and local query stack; extension packaging remains subject to validation.
 - The exact Rust SQLite integration and migration library are implementation choices for the task breakdown.
 - The exact `sqlite-vector` build and loading strategy must be validated for the single binary.
 - `fastembed` model selection and local model-asset lifecycle need a separate embedding design.

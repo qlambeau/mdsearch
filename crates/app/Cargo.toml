@@ -1,0 +1,24 @@
+[package]
+name = "kv-app"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+clap.workspace = true
+kv-application.workspace = true
+kv-domain.workspace = true
+kv-infrastructure.workspace = true
+kv-store-sqlite.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+rstest.workspace = true
+tempfile.workspace = true
+
+[[bin]]
+name = "kv"
+path = "src/bin/kv.rs"
+
+[lints]
+workspace = true
