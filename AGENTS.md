@@ -59,22 +59,28 @@ The complete implementation packet includes `specs/CONSTITUTION.md`.
 - Requirements define externally observable contracts.
 - Design documents define how approved behavior will be realized.
 - ADRs preserve consequential decisions, alternatives, and tradeoffs.
+- Diagrams (`CHART-NNN`) serve as the central repository of Mermaid-formatted diagrams to conceptualize architecture, design, and business processes without replacing inline diagrams in feature files.
+- Databases (`DB-NNN`) and Tables (`TABLE-NNN`) define the physical and logical database schemas, with strict frontmatter references between tables and their parent database.
 - Tasks define implementation order and verification, but must not silently change behavior.
 
 ## Identifier Rules
 
-Use independent monotonically increasing sequences for PRD, ADR, and user-story
-artifact types.
+Use independent monotonically increasing sequences for PRD, ADR, user-story,
+chart, database, and table artifact types.
 
 - PRDs use `PRD-NNN` and live at `specs/prds/PRD-NNN.md`.
 - ADRs use `ADR-NNN` and live under `specs/adr/`.
 - User stories use `US-NNN` and live at `specs/NNN-feature-slug/user-story.md`.
+- Diagrams use `CHART-NNN` and live at `specs/charts/CHART-NNN.md`.
+- Databases use `DB-NNN` and live at `specs/schema/DB-NNN.md`.
+- Tables use `TABLE-NNN` and live at `specs/schema/TABLE-NNN.md`.
 - `NNN` is exactly three zero-padded decimal digits.
-- Each prefix has its own sequence; creating `ADR-001` does not advance PRD or US numbering.
+- Each prefix has its own independent sequence; creating `ADR-001` or `CHART-001` does not advance PRD, DB, or TABLE numbering.
 - Allocate the next number above every existing active, archived, or superseded artifact of the same type.
 - Never reuse an ID, including after deletion, archiving, or supersession.
 - Preserve an ID when revising or moving an artifact.
-- Template placeholders such as `PRD-NNN`, `ADR-NNN`, and `US-NNN` do not consume numbers.
+- Template placeholders such as `PRD-NNN`, `ADR-NNN`, `US-NNN`, `CHART-NNN`, `DB-NNN`, and `TABLE-NNN` do not consume numbers.
+- Database and table files must start with a YAML frontmatter header that ALWAYS maintains strict bidirectional reference between tables and databases (`database: DB-NNN` in table frontmatter, `tables: [TABLE-NNN, ...]` in database frontmatter).
 - Scan existing artifacts before allocating an ID and stop if a collision is found.
 
 The current approved project PRD is `specs/prds/PRD-001.md`. The first concrete
