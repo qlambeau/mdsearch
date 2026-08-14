@@ -40,6 +40,8 @@ specs/
 |   |-- feature/
 |   |-- supporting/
 |-- adr/
+|-- charts/
+|-- schema/
 |-- 001-feature-slug/
 |   |-- user-story.md
 |   |-- scenarios.feature
