@@ -6,6 +6,8 @@ use std::env;
 use std::fmt;
 use std::process::{Command, ExitCode};
 
+pub mod eval;
+
 #[derive(Debug)]
 struct CommandFailed {
     command: String,
@@ -63,7 +65,13 @@ where
 
     match command.as_str() {
         "ci" if arguments.next().is_none() => run_ci(runner),
-        _ => Err("usage: cargo xtask ci".into()),
+        "eval" => {
+            let options = eval::parse_eval_args(arguments)?;
+            let mut stdout = std::io::stdout().lock();
+            eval::run_eval(&options, &mut stdout)?;
+            Ok(())
+        }
+        _ => Err("usage: cargo xtask <ci|eval>".into()),
     }
 }
 
@@ -159,6 +167,21 @@ mod tests {
         let result = run_with_args([String::from("unknown")], &mut runner);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn runs_eval_subcommand() -> Result<(), Box<dyn std::error::Error>> {
+        let mut runner = |_program: &str,
+                          _arguments: Vec<&'static str>,
+                          _environment: Option<(&'static str, &'static str)>|
+         -> Result<(), Box<dyn std::error::Error>> { Ok(()) };
+
+        run_with_args(
+            [String::from("eval"), String::from("--verify-only")],
+            &mut runner,
+        )?;
+
+        Ok(())
     }
 
     #[test]

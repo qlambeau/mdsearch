@@ -8,5 +8,8 @@ license.workspace = true
 kv-application.workspace = true
 kv-domain.workspace = true
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true

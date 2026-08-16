@@ -3,6 +3,10 @@
 
 //! Cross-cutting infrastructure for the `mdsearch` application.
 
+mod file_system;
+
+pub use file_system::SystemFileSystem;
+
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use kv_application::{Clock, ClockError};
