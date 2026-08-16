@@ -1,12 +1,12 @@
-//! Acceptance tests for the add-files application use case.
+//! Acceptance tests for the update-collection application use case.
 
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::path::{Path, PathBuf};
 
 use kv_application::{
-    AddFiles, AddFilesError, Clock, ClockError, FileRecord, FileStore, FileStoreError, FileSystem,
-    FileSystemError, StoredFile,
+    Clock, ClockError, FileRecord, FileStore, FileStoreError, FileSystem, FileSystemError,
+    StoredFile, UpdateCollection, UpdateTarget,
 };
 use kv_domain::{CollectionName, Timestamp};
 
@@ -65,6 +65,13 @@ impl InMemoryFileStore {
         self.collections
             .entry(collection.name_key().to_owned())
             .or_default();
+    }
+
+    fn store_file(&mut self, collection: &CollectionName, path: &str, content: &[u8]) {
+        self.collections
+            .entry(collection.name_key().to_owned())
+            .or_default()
+            .push(FileRecord::new(PathBuf::from(path), content.to_vec()));
     }
 }
 
@@ -129,91 +136,154 @@ fn collection() -> Result<CollectionName, kv_domain::CollectionNameError> {
     CollectionName::try_from("Notes")
 }
 
-/// Covers: FR-007 and FR-013 — discovered files are added and counted.
+/// Covers: FR-006 — a new on-disk file is added.
 #[test]
-fn adds_discovered_files_and_reports_the_count() -> Result<(), Box<dyn Error>> {
+fn adds_new_files() -> Result<(), Box<dyn Error>> {
     let collection = collection()?;
     let mut filesystem = InMemoryFileSystem::default();
-    filesystem.insert("a.md", b"alpha");
     filesystem.insert("b.md", b"beta");
     let mut store = InMemoryFileStore::default();
     store.add_collection(&collection);
-    let mut use_case = AddFiles::new(filesystem, store, FixedClock);
+    let mut use_case = UpdateCollection::new(filesystem, store, FixedClock);
 
     let outcome = use_case.execute(
         &collection,
-        &[PathBuf::from("a.md"), PathBuf::from("b.md")],
+        UpdateTarget::Paths(&[PathBuf::from("b.md")]),
         false,
     )?;
 
-    assert_eq!(outcome.added(), 2);
-    assert_eq!(outcome.skipped(), 0);
+    assert_eq!(outcome.added(), 1);
+    assert_eq!(outcome.modified(), 0);
+    assert_eq!(outcome.deleted(), 0);
 
     Ok(())
 }
 
-/// Covers: FR-011 — an unreadable path fails without ingesting.
+/// Covers: FR-007 — a changed file is re-ingested.
 #[test]
-fn fails_without_ingesting_when_a_path_is_unreadable() -> Result<(), Box<dyn Error>> {
+fn modifies_changed_files() -> Result<(), Box<dyn Error>> {
+    let collection = collection()?;
+    let mut filesystem = InMemoryFileSystem::default();
+    filesystem.insert("a.md", b"new content");
+    let mut store = InMemoryFileStore::default();
+    store.add_collection(&collection);
+    store.store_file(&collection, "a.md", b"old content");
+    let mut use_case = UpdateCollection::new(filesystem, store, FixedClock);
+
+    let outcome = use_case.execute(
+        &collection,
+        UpdateTarget::Paths(&[PathBuf::from("a.md")]),
+        false,
+    )?;
+
+    assert_eq!(outcome.modified(), 1);
+
+    Ok(())
+}
+
+/// Covers: FR-008 — a vanished file is removed.
+#[test]
+fn removes_deleted_files() -> Result<(), Box<dyn Error>> {
     let collection = collection()?;
     let filesystem = InMemoryFileSystem::default();
     let mut store = InMemoryFileStore::default();
     store.add_collection(&collection);
-    let mut use_case = AddFiles::new(filesystem, store, FixedClock);
+    store.store_file(&collection, "a.md", b"content");
+    let mut use_case = UpdateCollection::new(filesystem, store, FixedClock);
+
+    let outcome = use_case.execute(&collection, UpdateTarget::Paths(&[]), false)?;
+
+    assert_eq!(outcome.deleted(), 1);
+
+    Ok(())
+}
+
+/// Covers: FR-009 — an unchanged file is left as-is.
+#[test]
+fn leaves_unchanged_files_alone() -> Result<(), Box<dyn Error>> {
+    let collection = collection()?;
+    let mut filesystem = InMemoryFileSystem::default();
+    filesystem.insert("a.md", b"same");
+    let mut store = InMemoryFileStore::default();
+    store.add_collection(&collection);
+    store.store_file(&collection, "a.md", b"same");
+    let mut use_case = UpdateCollection::new(filesystem, store, FixedClock);
+
+    let outcome = use_case.execute(
+        &collection,
+        UpdateTarget::Paths(&[PathBuf::from("a.md")]),
+        false,
+    )?;
+
+    assert_eq!(outcome.added(), 0);
+    assert_eq!(outcome.modified(), 0);
+    assert_eq!(outcome.deleted(), 0);
+
+    Ok(())
+}
+
+/// Covers: FR-010 — `--all` (Stored) re-hashes stored files to detect edits.
+#[test]
+fn detects_modifications_for_the_stored_target() -> Result<(), Box<dyn Error>> {
+    let collection = collection()?;
+    let mut filesystem = InMemoryFileSystem::default();
+    filesystem.insert("a.md", b"edited");
+    let mut store = InMemoryFileStore::default();
+    store.add_collection(&collection);
+    store.store_file(&collection, "a.md", b"original");
+    let mut use_case = UpdateCollection::new(filesystem, store, FixedClock);
+
+    let outcome = use_case.execute(&collection, UpdateTarget::Stored, false)?;
+
+    assert_eq!(outcome.modified(), 1);
+
+    Ok(())
+}
+
+/// Covers: FR-011 — an unreadable path fails the whole command.
+#[test]
+fn fails_when_a_path_is_unreadable() -> Result<(), Box<dyn Error>> {
+    let collection = collection()?;
+    let filesystem = InMemoryFileSystem::default();
+    let mut store = InMemoryFileStore::default();
+    store.add_collection(&collection);
+    let mut use_case = UpdateCollection::new(filesystem, store, FixedClock);
 
     let error = use_case
-        .execute(&collection, &[PathBuf::from("missing.md")], false)
+        .execute(
+            &collection,
+            UpdateTarget::Paths(&[PathBuf::from("missing.md")]),
+            false,
+        )
         .err()
         .ok_or_else(|| std::io::Error::other("an unreadable path should fail"))?;
 
     assert!(matches!(
         error,
-        AddFilesError::FileSystem(FileSystemError::Unreadable { .. })
+        kv_application::UpdateCollectionError::FileSystem(FileSystemError::Unreadable { .. })
     ));
 
     Ok(())
 }
 
-/// Covers: FR-012 — `--force` skips unreadable paths and continues.
+/// Covers: FR-012 — `--force` skips unreadable paths.
 #[test]
 fn skips_unreadable_paths_when_forced() -> Result<(), Box<dyn Error>> {
     let collection = collection()?;
     let mut filesystem = InMemoryFileSystem::default();
-    filesystem.insert("notes.md", b"content");
+    filesystem.insert("b.md", b"beta");
     let mut store = InMemoryFileStore::default();
     store.add_collection(&collection);
-    let mut use_case = AddFiles::new(filesystem, store, FixedClock);
+    let mut use_case = UpdateCollection::new(filesystem, store, FixedClock);
 
     let outcome = use_case.execute(
         &collection,
-        &[PathBuf::from("missing.md"), PathBuf::from("notes.md")],
+        UpdateTarget::Paths(&[PathBuf::from("missing.md"), PathBuf::from("b.md")]),
         true,
     )?;
 
     assert_eq!(outcome.added(), 1);
     assert_eq!(outcome.skipped(), 1);
-
-    Ok(())
-}
-
-/// Covers: FR-005 — an absent collection reports not found.
-#[test]
-fn reports_collection_not_found() -> Result<(), Box<dyn Error>> {
-    let collection = collection()?;
-    let mut filesystem = InMemoryFileSystem::default();
-    filesystem.insert("a.md", b"content");
-    let store = InMemoryFileStore::default();
-    let mut use_case = AddFiles::new(filesystem, store, FixedClock);
-
-    let error = use_case
-        .execute(&collection, &[PathBuf::from("a.md")], false)
-        .err()
-        .ok_or_else(|| std::io::Error::other("an absent collection should fail"))?;
-
-    assert!(matches!(
-        error,
-        AddFilesError::FileStore(FileStoreError::CollectionNotFound)
-    ));
 
     Ok(())
 }

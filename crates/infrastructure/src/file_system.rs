@@ -24,6 +24,17 @@ impl FileSystem for SystemFileSystem {
     fn read(&self, path: &Path) -> Result<Vec<u8>, FileSystemError> {
         fs::read(path).map_err(|source| unreadable(path, source))
     }
+
+    fn exists(&self, path: &Path) -> Result<bool, FileSystemError> {
+        match fs::metadata(path) {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(FileSystemError::Unreadable {
+                path: path.to_owned(),
+                source: error,
+            }),
+        }
+    }
 }
 
 fn unreadable(path: &Path, source: std::io::Error) -> FileSystemError {

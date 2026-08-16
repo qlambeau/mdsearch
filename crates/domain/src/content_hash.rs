@@ -1,10 +1,19 @@
 use std::fmt::Write;
 
 use sha2::{Digest, Sha256};
+use thiserror::Error;
 
 /// A SHA-256 content hash represented as lowercase hexadecimal.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ContentHash(String);
+
+/// Describes why a content hash string is invalid.
+#[derive(Clone, Debug, Eq, Error, PartialEq)]
+pub enum ContentHashError {
+    /// The value is not a 64-character hexadecimal string.
+    #[error("content hash must be 64 hexadecimal characters")]
+    Invalid,
+}
 
 impl ContentHash {
     /// Computes the SHA-256 hash of `content`.
@@ -19,6 +28,19 @@ impl ContentHash {
                 output
             });
         Self(hex)
+    }
+
+    /// Reconstructs a hash from a lowercase hexadecimal string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the string is not 64 hexadecimal characters.
+    pub fn try_from_hex(hex: &str) -> Result<Self, ContentHashError> {
+        if hex.len() == 64 && hex.chars().all(|character| character.is_ascii_hexdigit()) {
+            Ok(Self(hex.to_ascii_lowercase()))
+        } else {
+            Err(ContentHashError::Invalid)
+        }
     }
 
     /// Returns the hash as a lowercase hexadecimal string.
@@ -61,6 +83,26 @@ mod tests {
         assert_eq!(hex.len(), 64);
         assert!(hex.chars().all(|character| character.is_ascii_hexdigit()));
         assert_eq!(hex, hex.to_lowercase());
+    }
+
+    /// Covers: `try_from_hex` reconstructs a hash that round-trips with
+    /// `from_content`.
+    #[test]
+    fn reconstructs_a_hash_from_hex() -> Result<(), super::ContentHashError> {
+        let hash = ContentHash::from_content(b"content");
+
+        let reconstructed = ContentHash::try_from_hex(hash.as_str())?;
+
+        assert_eq!(reconstructed, hash);
+
+        Ok(())
+    }
+
+    /// Covers: `try_from_hex` rejects malformed input.
+    #[test]
+    fn rejects_invalid_hex() {
+        assert!(ContentHash::try_from_hex("too short").is_err());
+        assert!(ContentHash::try_from_hex(&"g".repeat(64)).is_err());
     }
 
     proptest! {

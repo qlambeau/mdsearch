@@ -96,3 +96,17 @@ pub enum AddFilesError {
     #[error(transparent)]
     FileStore(#[from] FileStoreError),
 }
+
+/// Describes a failure from the update-collection use case.
+#[derive(Debug, Error)]
+pub enum UpdateCollectionError {
+    /// The clock could not provide ingest timestamps.
+    #[error(transparent)]
+    Clock(#[from] ClockError),
+    /// A file could not be discovered or read.
+    #[error(transparent)]
+    FileSystem(#[from] FileSystemError),
+    /// The file store rejected or failed the reconciliation.
+    #[error(transparent)]
+    FileStore(#[from] FileStoreError),
+}

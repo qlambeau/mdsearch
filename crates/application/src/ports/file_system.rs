@@ -20,4 +20,12 @@ pub trait FileSystem {
     ///
     /// Returns an error when the file cannot be read.
     fn read(&self, path: &Path) -> Result<Vec<u8>, FileSystemError>;
+
+    /// Returns whether the path exists, treating only a missing path as absent.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the path cannot be inspected for a reason other
+    /// than absence.
+    fn exists(&self, path: &Path) -> Result<bool, FileSystemError>;
 }

@@ -3,7 +3,10 @@ use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
-use kv_application::{AddFiles, CreateCollection, DestroyCollection, ListCollections};
+use kv_application::{
+    AddFiles, CreateCollection, DestroyCollection, ListCollections, UpdateCollection,
+    UpdateOutcome, UpdateTarget,
+};
 use kv_domain::CollectionName;
 use kv_infrastructure::{SystemClock, SystemFileSystem};
 use kv_store_sqlite::{SqliteCollectionStore, SqliteFileStore};
@@ -41,6 +44,24 @@ where
             arguments.force,
             home_directory,
         ),
+        Command::Collection(CollectionCommand::Update(arguments)) => {
+            if arguments.all {
+                update_all_collections(arguments.database, arguments.force, home_directory)
+            } else {
+                let name = arguments.name.as_deref().ok_or_else(|| {
+                    AppError::Arguments(clap::Error::new(
+                        clap::error::ErrorKind::MissingRequiredArgument,
+                    ))
+                })?;
+                update_collection(
+                    name,
+                    &arguments.paths,
+                    arguments.database,
+                    arguments.force,
+                    home_directory,
+                )
+            }
+        }
     }
 }
 
@@ -128,4 +149,57 @@ fn add_files(
     }
 
     Ok(message)
+}
+
+fn update_collection(
+    raw_name: &str,
+    paths: &[PathBuf],
+    database_override: Option<PathBuf>,
+    force: bool,
+    home_directory: &Path,
+) -> Result<String, AppError> {
+    let name = CollectionName::try_from(raw_name)?;
+    let database_path = database_override
+        .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
+    let store = SqliteFileStore::open_for_ingestion(&database_path)?;
+    let mut use_case = UpdateCollection::new(SystemFileSystem, store, SystemClock);
+    let outcome = use_case.execute(&name, UpdateTarget::Paths(paths), force)?;
+
+    Ok(format_update(name.display_name(), &outcome))
+}
+
+fn update_all_collections(
+    database_override: Option<PathBuf>,
+    force: bool,
+    home_directory: &Path,
+) -> Result<String, AppError> {
+    let database_path = database_override
+        .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
+    let collection_store = SqliteCollectionStore::open_existing(&database_path)?;
+    let names = ListCollections::new(collection_store).execute()?;
+
+    let store = SqliteFileStore::open_for_ingestion(&database_path)?;
+    let mut use_case = UpdateCollection::new(SystemFileSystem, store, SystemClock);
+
+    let mut lines = Vec::new();
+    for name in &names {
+        let outcome = use_case.execute(name, UpdateTarget::Stored, force)?;
+        lines.push(format_update(name.display_name(), &outcome));
+    }
+
+    Ok(lines.join("\n"))
+}
+
+fn format_update(display_name: &str, outcome: &UpdateOutcome) -> String {
+    let mut line = format!(
+        "updated collection \"{display_name}\": added {}, modified {}, deleted {}",
+        outcome.added(),
+        outcome.modified(),
+        outcome.deleted()
+    );
+    if outcome.skipped() > 0 {
+        // Writing to a `String` cannot fail.
+        let _ = write!(line, " (skipped {})", outcome.skipped());
+    }
+    line
 }

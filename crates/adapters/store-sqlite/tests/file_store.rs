@@ -186,3 +186,70 @@ fn reports_a_missing_database_without_creating_it() -> Result<(), Box<dyn Error>
 
     Ok(())
 }
+
+/// Covers: `list_files` returns stored paths and hashes.
+#[test]
+fn lists_stored_files_with_hashes() -> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let database_path = directory.path().join("collections.db");
+    let collection = name()?;
+    let mut collections = SqliteCollectionStore::open(&database_path)?;
+    collections.create_collection(&collection, Timestamp::from_unix_seconds(1_700_000_000))?;
+
+    let path = directory.path().join("a.md");
+    let mut store = SqliteFileStore::open_for_ingestion(&database_path)?;
+    store.upsert_files(
+        &collection,
+        &[FileRecord::new(path.clone(), b"content".to_vec())],
+        Timestamp::from_unix_seconds(1_700_000_000),
+    )?;
+
+    let stored = store.list_files(&collection)?;
+
+    assert_eq!(stored.len(), 1);
+    let single = stored
+        .first()
+        .ok_or_else(|| std::io::Error::other("expected one stored file"))?;
+    assert_eq!(single.path(), path.as_path());
+    assert_eq!(
+        single.content_hash().as_str(),
+        kv_domain::ContentHash::from_content(b"content").as_str()
+    );
+
+    Ok(())
+}
+
+/// Covers: `reconcile` upserts and deletes atomically.
+#[test]
+fn reconciles_upserts_and_deletes() -> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let database_path = directory.path().join("collections.db");
+    let collection = name()?;
+    let mut collections = SqliteCollectionStore::open(&database_path)?;
+    collections.create_collection(&collection, Timestamp::from_unix_seconds(1_700_000_000))?;
+
+    let kept = directory.path().join("kept.md");
+    let removed = directory.path().join("removed.md");
+    let mut store = SqliteFileStore::open_for_ingestion(&database_path)?;
+    store.upsert_files(
+        &collection,
+        &[FileRecord::new(removed.clone(), b"remove".to_vec())],
+        Timestamp::from_unix_seconds(1_700_000_000),
+    )?;
+
+    store.reconcile(
+        &collection,
+        &[FileRecord::new(kept.clone(), b"keep".to_vec())],
+        std::slice::from_ref(&removed),
+        Timestamp::from_unix_seconds(1_700_000_001),
+    )?;
+
+    let stored = store.list_files(&collection)?;
+    assert_eq!(stored.len(), 1);
+    let single = stored
+        .first()
+        .ok_or_else(|| std::io::Error::other("expected one stored file"))?;
+    assert_eq!(single.path(), kept.as_path());
+
+    Ok(())
+}

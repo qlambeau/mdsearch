@@ -96,3 +96,26 @@ fn reads_file_bytes() -> Result<(), Box<dyn Error>> {
 
     Ok(())
 }
+
+/// Covers: `exists` reports true for a present path.
+#[test]
+fn exists_reports_true_for_a_present_path() -> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let file = directory.path().join("notes.md");
+    fs::write(&file, "content")?;
+
+    assert!(SystemFileSystem.exists(&file)?);
+
+    Ok(())
+}
+
+/// Covers: `exists` reports false only for a missing path.
+#[test]
+fn exists_reports_false_for_a_missing_path() -> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let missing = directory.path().join("missing.md");
+
+    assert!(!SystemFileSystem.exists(&missing)?);
+
+    Ok(())
+}

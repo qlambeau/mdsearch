@@ -2,7 +2,7 @@ use thiserror::Error;
 
 use kv_application::{
     AddFilesError, CollectionStoreError, CreateCollectionError, DestroyCollectionError,
-    ListCollectionsError,
+    ListCollectionsError, UpdateCollectionError,
 };
 use kv_domain::CollectionNameError;
 
@@ -27,6 +27,9 @@ pub enum AppError {
     /// The add-files use case failed.
     #[error(transparent)]
     AddFiles(#[from] AddFilesError),
+    /// The update-collection use case failed.
+    #[error(transparent)]
+    UpdateCollection(#[from] UpdateCollectionError),
     /// The database could not be opened or accessed.
     #[error(transparent)]
     CollectionStore(#[from] CollectionStoreError),
