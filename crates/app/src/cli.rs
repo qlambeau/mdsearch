@@ -18,12 +18,19 @@ pub(crate) enum Command {
 #[derive(Debug, Subcommand)]
 pub(crate) enum CollectionCommand {
     Create(CreateCollectionArgs),
+    List(ListCollectionsArgs),
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct CreateCollectionArgs {
     #[arg(value_name = "NAME")]
     pub(crate) name: String,
+    #[arg(long, value_name = "PATH")]
+    pub(crate) database: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ListCollectionsArgs {
     #[arg(long, value_name = "PATH")]
     pub(crate) database: Option<PathBuf>,
 }

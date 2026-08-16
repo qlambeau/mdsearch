@@ -20,6 +20,14 @@ impl CollectionStore for InMemoryStore {
         self.created_names.push(name.display_name().to_owned());
         Ok(())
     }
+
+    fn list_collections(&self) -> Result<Vec<CollectionName>, CollectionStoreError> {
+        self.created_names
+            .iter()
+            .map(|name| CollectionName::try_from(name.as_str()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| CollectionStoreError::Storage(Box::new(error)))
+    }
 }
 
 struct FixedClock;

@@ -55,6 +55,23 @@ impl SqliteCollectionStore {
 
         Ok(Self { connection })
     }
+
+    /// Opens an existing `SQLite` collection database at `path` without
+    /// creating or initializing it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database-not-found error when the file does not exist, or a
+    /// database-unavailable error when it cannot be opened.
+    pub fn open_existing(path: &Path) -> Result<Self, CollectionStoreError> {
+        if !path.exists() {
+            return Err(CollectionStoreError::DatabaseNotFound);
+        }
+
+        let connection = Connection::open(path).map_err(database_unavailable)?;
+
+        Ok(Self { connection })
+    }
 }
 
 fn register_vector_extension(connection: &Connection) -> Result<(), sqlite3_ext::Error> {
@@ -101,6 +118,26 @@ impl CollectionStore for SqliteCollectionStore {
             .map_err(storage_failure)?;
 
         transaction.commit().map_err(storage_failure)
+    }
+
+    fn list_collections(&self) -> Result<Vec<CollectionName>, CollectionStoreError> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT display_name FROM collections ORDER BY name_key")
+            .map_err(storage_failure)?;
+
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(storage_failure)?;
+
+        let mut names = Vec::new();
+        for row in rows {
+            let display_name = row.map_err(storage_failure)?;
+            let name = CollectionName::try_from(display_name.as_str()).map_err(storage_failure)?;
+            names.push(name);
+        }
+
+        Ok(names)
     }
 }
 

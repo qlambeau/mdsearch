@@ -15,4 +15,11 @@ pub trait CollectionStore {
         name: &CollectionName,
         created_at: Timestamp,
     ) -> Result<(), CollectionStoreError>;
+
+    /// Returns all collections in case-insensitive alphabetical order.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database or storage error when the collections cannot be read.
+    fn list_collections(&self) -> Result<Vec<CollectionName>, CollectionStoreError>;
 }

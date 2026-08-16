@@ -17,6 +17,9 @@ fn main() -> ExitCode {
 
     match kv_app::run(std::env::args_os(), &home_directory) {
         Ok(output) => {
+            if output.is_empty() {
+                return ExitCode::SUCCESS;
+            }
             let mut stdout = io::stdout().lock();
             if writeln!(stdout, "{output}").is_err() {
                 return ExitCode::FAILURE;

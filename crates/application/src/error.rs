@@ -8,6 +8,9 @@ pub enum CollectionStoreError {
     /// A case-insensitive equivalent already exists.
     #[error("collection name is already in use")]
     Duplicate,
+    /// The selected database does not exist.
+    #[error("database does not exist")]
+    DatabaseNotFound,
     /// The selected database could not be created or opened.
     #[error("database is unavailable")]
     DatabaseUnavailable(#[source] Box<dyn Error + Send + Sync>),
@@ -31,6 +34,14 @@ pub enum CreateCollectionError {
     #[error(transparent)]
     Clock(#[from] ClockError),
     /// The collection store rejected or failed the creation.
+    #[error(transparent)]
+    Store(#[from] CollectionStoreError),
+}
+
+/// Describes a failure from the list-collections use case.
+#[derive(Debug, Error)]
+pub enum ListCollectionsError {
+    /// The collection store rejected or failed the listing.
     #[error(transparent)]
     Store(#[from] CollectionStoreError),
 }
