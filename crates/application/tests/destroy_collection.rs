@@ -1,8 +1,8 @@
-//! Acceptance tests for the list-collections application use case.
+//! Acceptance tests for the destroy-collection application use case.
 
 use std::error::Error;
 
-use kv_application::{CollectionStore, CollectionStoreError, ListCollections};
+use kv_application::{CollectionStore, CollectionStoreError, DestroyCollection};
 use kv_domain::{CollectionName, Timestamp};
 
 #[derive(Default)]
@@ -44,35 +44,37 @@ impl CollectionStore for InMemoryStore {
     }
 }
 
-/// Covers: FR-004 — the use case passes through stored collection names.
+/// Covers: FR-004 and FR-008 — destroying returns the retained spelling.
 #[test]
-fn lists_collections_through_the_application_use_case() -> Result<(), Box<dyn Error>> {
+fn destroys_a_collection_and_returns_the_retained_spelling() -> Result<(), Box<dyn Error>> {
     let mut store = InMemoryStore::default();
     store.create_collection(
         &CollectionName::try_from("Notes")?,
         Timestamp::from_unix_seconds(1_700_000_000),
     )?;
-    let use_case = ListCollections::new(store);
+    let mut use_case = DestroyCollection::new(store);
 
-    let collections = use_case.execute()?;
+    let destroyed = use_case.execute(&CollectionName::try_from("notes")?)?;
 
-    let names = collections
-        .iter()
-        .map(CollectionName::display_name)
-        .collect::<Vec<_>>();
-    assert_eq!(names, ["Notes"]);
+    assert_eq!(destroyed.display_name(), "Notes");
 
     Ok(())
 }
 
-/// Covers: FR-005 — an empty store lists no collections.
+/// Covers: FR-006 — destroying an absent collection reports not found.
 #[test]
-fn lists_no_collections_when_the_store_is_empty() -> Result<(), Box<dyn Error>> {
-    let use_case = ListCollections::new(InMemoryStore::default());
+fn reports_not_found_when_the_collection_is_absent() -> Result<(), Box<dyn Error>> {
+    let mut use_case = DestroyCollection::new(InMemoryStore::default());
 
-    let collections = use_case.execute()?;
+    let error = use_case
+        .execute(&CollectionName::try_from("Missing")?)
+        .err()
+        .ok_or_else(|| std::io::Error::other("an absent collection should fail to destroy"))?;
 
-    assert!(collections.is_empty());
+    assert!(matches!(
+        error,
+        kv_application::DestroyCollectionError::Store(CollectionStoreError::CollectionNotFound)
+    ));
 
     Ok(())
 }

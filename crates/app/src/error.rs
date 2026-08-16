@@ -1,6 +1,8 @@
 use thiserror::Error;
 
-use kv_application::{CollectionStoreError, CreateCollectionError, ListCollectionsError};
+use kv_application::{
+    CollectionStoreError, CreateCollectionError, DestroyCollectionError, ListCollectionsError,
+};
 use kv_domain::CollectionNameError;
 
 /// Describes a user-visible failure from the `mdsearch` CLI.
@@ -18,6 +20,9 @@ pub enum AppError {
     /// The list-collections use case failed.
     #[error(transparent)]
     ListCollections(#[from] ListCollectionsError),
+    /// The destroy-collection use case failed.
+    #[error(transparent)]
+    DestroyCollection(#[from] DestroyCollectionError),
     /// The database could not be opened or accessed.
     #[error(transparent)]
     CollectionStore(#[from] CollectionStoreError),

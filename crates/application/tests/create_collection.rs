@@ -28,6 +28,21 @@ impl CollectionStore for InMemoryStore {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| CollectionStoreError::Storage(Box::new(error)))
     }
+
+    fn destroy_collection(
+        &mut self,
+        name: &CollectionName,
+    ) -> Result<CollectionName, CollectionStoreError> {
+        let index = self
+            .created_names
+            .iter()
+            .position(|stored| stored.eq_ignore_ascii_case(name.display_name()))
+            .ok_or(CollectionStoreError::CollectionNotFound)?;
+
+        let display_name = self.created_names.remove(index);
+        CollectionName::try_from(display_name.as_str())
+            .map_err(|error| CollectionStoreError::Storage(Box::new(error)))
+    }
 }
 
 struct FixedClock;

@@ -139,6 +139,25 @@ impl CollectionStore for SqliteCollectionStore {
 
         Ok(names)
     }
+
+    fn destroy_collection(
+        &mut self,
+        name: &CollectionName,
+    ) -> Result<CollectionName, CollectionStoreError> {
+        let display_name = self
+            .connection
+            .query_row(
+                "DELETE FROM collections WHERE name_key = ?1 RETURNING display_name",
+                params![name.name_key()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(storage_failure)?;
+
+        let display_name = display_name.ok_or(CollectionStoreError::CollectionNotFound)?;
+
+        CollectionName::try_from(display_name.as_str()).map_err(storage_failure)
+    }
 }
 
 fn database_unavailable(error: impl Error + Send + Sync + 'static) -> CollectionStoreError {

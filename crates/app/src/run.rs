@@ -2,7 +2,7 @@ use std::ffi::OsString;
 use std::path::Path;
 
 use clap::Parser;
-use kv_application::{CreateCollection, ListCollections};
+use kv_application::{CreateCollection, DestroyCollection, ListCollections};
 use kv_domain::CollectionName;
 use kv_infrastructure::SystemClock;
 use kv_store_sqlite::SqliteCollectionStore;
@@ -29,6 +29,9 @@ where
         }
         Command::Collection(CollectionCommand::List(arguments)) => {
             list_collections(arguments.database, home_directory)
+        }
+        Command::Collection(CollectionCommand::Destroy(arguments)) => {
+            destroy_collection(&arguments.name, arguments.database, home_directory)
         }
     }
 }
@@ -66,4 +69,22 @@ fn list_collections(
         .map(CollectionName::display_name)
         .collect::<Vec<_>>()
         .join("\n"))
+}
+
+fn destroy_collection(
+    raw_name: &str,
+    database_override: Option<std::path::PathBuf>,
+    home_directory: &Path,
+) -> Result<String, AppError> {
+    let name = CollectionName::try_from(raw_name)?;
+    let database_path = database_override
+        .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
+    let store = SqliteCollectionStore::open_existing(&database_path)?;
+    let mut use_case = DestroyCollection::new(store);
+    let destroyed_name = use_case.execute(&name)?;
+
+    Ok(format!(
+        "destroyed collection \"{}\"",
+        destroyed_name.display_name()
+    ))
 }

@@ -8,6 +8,9 @@ pub enum CollectionStoreError {
     /// A case-insensitive equivalent already exists.
     #[error("collection name is already in use")]
     Duplicate,
+    /// The requested collection does not exist.
+    #[error("collection not found")]
+    CollectionNotFound,
     /// The selected database does not exist.
     #[error("database does not exist")]
     DatabaseNotFound,
@@ -42,6 +45,14 @@ pub enum CreateCollectionError {
 #[derive(Debug, Error)]
 pub enum ListCollectionsError {
     /// The collection store rejected or failed the listing.
+    #[error(transparent)]
+    Store(#[from] CollectionStoreError),
+}
+
+/// Describes a failure from the destroy-collection use case.
+#[derive(Debug, Error)]
+pub enum DestroyCollectionError {
+    /// The collection store rejected or failed the destruction.
     #[error(transparent)]
     Store(#[from] CollectionStoreError),
 }
