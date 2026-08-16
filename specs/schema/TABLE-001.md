@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 
 | Column | Data Type | Nullable | Primary Key | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `version` | `INTEGER` | No | No | None | Current applied database schema version number (initialized to `1`). |
+| `version` | `INTEGER` | No | No | None | Current applied database schema version number (set to `2` by the migration). |
 
 ## Indexes & Constraints
 
@@ -47,4 +47,5 @@ CREATE TABLE IF NOT EXISTS schema_version (
   SELECT 1
   WHERE NOT EXISTS (SELECT 1 FROM schema_version);
   ```
-- Incremented monotonically when schema migrations are applied in future feature slices.
+- Incremented monotonically when schema migrations are applied in feature
+  slices; the migration in `004-add-files` advances it to `2`.

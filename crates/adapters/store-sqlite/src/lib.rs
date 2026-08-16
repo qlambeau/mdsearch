@@ -7,13 +7,18 @@ use std::error::Error;
 use std::fs;
 use std::path::Path;
 
-use kv_application::{CollectionStore, CollectionStoreError};
+use kv_application::{
+    CollectionStore, CollectionStoreError, FileRecord, FileStore, FileStoreError,
+};
 use kv_domain::{CollectionName, Timestamp};
 use rusqlite::{Connection, OptionalExtension, params};
 use sqlite_vector_rs::scalar;
 use sqlite_vector_rs::vtab::{Registry, VectorTable};
 use sqlite3_ext::Connection as ExtensionConnection;
 use sqlite3_ext::vtab::{Module, StandardModule};
+
+/// The current database schema version applied by [`migrate`].
+const CURRENT_SCHEMA_VERSION: i64 = 2;
 
 /// Persists collection metadata in one `SQLite` database file.
 pub struct SqliteCollectionStore {
@@ -35,23 +40,7 @@ impl SqliteCollectionStore {
         let connection = Connection::open(path).map_err(database_unavailable)?;
 
         register_vector_extension(&connection).map_err(storage_failure)?;
-
-        connection
-            .execute_batch(
-                "CREATE TABLE IF NOT EXISTS schema_version (
-                    version INTEGER NOT NULL
-                );
-                INSERT INTO schema_version(version)
-                SELECT 1
-                WHERE NOT EXISTS (SELECT 1 FROM schema_version);
-                CREATE TABLE IF NOT EXISTS collections (
-                    collection_id INTEGER PRIMARY KEY,
-                    display_name TEXT NOT NULL,
-                    name_key TEXT NOT NULL UNIQUE,
-                    created_at INTEGER NOT NULL
-                );",
-            )
-            .map_err(storage_failure)?;
+        migrate(&connection).map_err(storage_failure)?;
 
         Ok(Self { connection })
     }
@@ -74,6 +63,33 @@ impl SqliteCollectionStore {
     }
 }
 
+/// Persists ingested files in one `SQLite` database file.
+pub struct SqliteFileStore {
+    connection: Connection,
+}
+
+impl SqliteFileStore {
+    /// Opens an existing `SQLite` database for ingestion, migrating it to the
+    /// current schema version.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database-not-found error when the file does not exist, a
+    /// database-unavailable error when it cannot be opened, or a storage error
+    /// when the migration fails.
+    pub fn open_for_ingestion(path: &Path) -> Result<Self, CollectionStoreError> {
+        if !path.exists() {
+            return Err(CollectionStoreError::DatabaseNotFound);
+        }
+
+        let connection = Connection::open(path).map_err(database_unavailable)?;
+
+        migrate(&connection).map_err(storage_failure)?;
+
+        Ok(Self { connection })
+    }
+}
+
 fn register_vector_extension(connection: &Connection) -> Result<(), sqlite3_ext::Error> {
     let extension_connection = ExtensionConnection::from_rusqlite(connection);
     let module = StandardModule::<VectorTable<'_>>::new()
@@ -84,6 +100,49 @@ fn register_vector_extension(connection: &Connection) -> Result<(), sqlite3_ext:
 
     extension_connection.create_module("vector", module, registry.clone())?;
     scalar::register_scalar_functions(extension_connection, registry)
+}
+
+/// Creates the schema tables if absent and bumps the stored version to
+/// [`CURRENT_SCHEMA_VERSION`].
+fn migrate(connection: &Connection) -> Result<(), rusqlite::Error> {
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS schema_version (
+            version INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS collections (
+            collection_id INTEGER PRIMARY KEY,
+            display_name TEXT NOT NULL,
+            name_key TEXT NOT NULL UNIQUE,
+            created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS files (
+            file_id INTEGER PRIMARY KEY,
+            collection_id INTEGER NOT NULL REFERENCES collections(collection_id) ON DELETE CASCADE,
+            path TEXT NOT NULL,
+            content BLOB NOT NULL,
+            content_hash TEXT NOT NULL,
+            byte_size INTEGER NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            UNIQUE(collection_id, path)
+        );",
+    )?;
+
+    let version: i64 = connection.query_row(
+        "SELECT COALESCE(MAX(version), 0) FROM schema_version",
+        [],
+        |row| row.get(0),
+    )?;
+
+    if version < CURRENT_SCHEMA_VERSION {
+        connection.execute("DELETE FROM schema_version", [])?;
+        connection.execute(
+            "INSERT INTO schema_version(version) VALUES (?1)",
+            [CURRENT_SCHEMA_VERSION],
+        )?;
+    }
+
+    Ok(())
 }
 
 impl CollectionStore for SqliteCollectionStore {
@@ -160,12 +219,70 @@ impl CollectionStore for SqliteCollectionStore {
     }
 }
 
+impl FileStore for SqliteFileStore {
+    fn upsert_files(
+        &mut self,
+        collection: &CollectionName,
+        files: &[FileRecord],
+        ingested_at: Timestamp,
+    ) -> Result<(), FileStoreError> {
+        let ingested_at =
+            i64::try_from(ingested_at.as_unix_seconds()).map_err(file_storage_failure)?;
+        let transaction = self
+            .connection
+            .transaction()
+            .map_err(file_storage_failure)?;
+
+        let collection_id = transaction
+            .query_row(
+                "SELECT collection_id FROM collections WHERE name_key = ?1 LIMIT 1",
+                params![collection.name_key()],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(file_storage_failure)?
+            .ok_or(FileStoreError::CollectionNotFound)?;
+
+        for file in files {
+            let path = file.path().to_string_lossy();
+            let byte_size = i64::try_from(file.content().len()).map_err(file_storage_failure)?;
+
+            transaction
+                .execute(
+                    "INSERT INTO files(
+                        collection_id, path, content, content_hash, byte_size, created_at, updated_at
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+                    ON CONFLICT(collection_id, path) DO UPDATE SET
+                        content = excluded.content,
+                        content_hash = excluded.content_hash,
+                        byte_size = excluded.byte_size,
+                        updated_at = excluded.updated_at",
+                    params![
+                        collection_id,
+                        path.as_ref(),
+                        file.content(),
+                        file.content_hash().as_str(),
+                        byte_size,
+                        ingested_at,
+                    ],
+                )
+                .map_err(file_storage_failure)?;
+        }
+
+        transaction.commit().map_err(file_storage_failure)
+    }
+}
+
 fn database_unavailable(error: impl Error + Send + Sync + 'static) -> CollectionStoreError {
     CollectionStoreError::DatabaseUnavailable(Box::new(error))
 }
 
 fn storage_failure(error: impl Error + Send + Sync + 'static) -> CollectionStoreError {
     CollectionStoreError::Storage(Box::new(error))
+}
+
+fn file_storage_failure(error: impl Error + Send + Sync + 'static) -> FileStoreError {
+    FileStoreError::Storage(Box::new(error))
 }
 
 #[cfg(test)]

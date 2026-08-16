@@ -1,11 +1,12 @@
 use std::ffi::OsString;
-use std::path::Path;
+use std::fmt::Write;
+use std::path::{Path, PathBuf};
 
 use clap::Parser;
-use kv_application::{CreateCollection, DestroyCollection, ListCollections};
+use kv_application::{AddFiles, CreateCollection, DestroyCollection, ListCollections};
 use kv_domain::CollectionName;
-use kv_infrastructure::SystemClock;
-use kv_store_sqlite::SqliteCollectionStore;
+use kv_infrastructure::{SystemClock, SystemFileSystem};
+use kv_store_sqlite::{SqliteCollectionStore, SqliteFileStore};
 
 use crate::AppError;
 use crate::cli::{Cli, CollectionCommand, Command};
@@ -33,6 +34,13 @@ where
         Command::Collection(CollectionCommand::Destroy(arguments)) => {
             destroy_collection(&arguments.name, arguments.database, home_directory)
         }
+        Command::Collection(CollectionCommand::Add(arguments)) => add_files(
+            &arguments.name,
+            &arguments.paths,
+            arguments.database,
+            arguments.force,
+            home_directory,
+        ),
     }
 }
 
@@ -87,4 +95,37 @@ fn destroy_collection(
         "destroyed collection \"{}\"",
         destroyed_name.display_name()
     ))
+}
+
+fn add_files(
+    raw_name: &str,
+    paths: &[PathBuf],
+    database_override: Option<PathBuf>,
+    force: bool,
+    home_directory: &Path,
+) -> Result<String, AppError> {
+    let name = CollectionName::try_from(raw_name)?;
+    let database_path = database_override
+        .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
+    let store = SqliteFileStore::open_for_ingestion(&database_path)?;
+    let mut use_case = AddFiles::new(SystemFileSystem, store, SystemClock);
+    let outcome = use_case.execute(&name, paths, force)?;
+
+    let file_label = if outcome.added() == 1 {
+        "file"
+    } else {
+        "files"
+    };
+    let mut message = format!(
+        "added {} {} to collection \"{}\"",
+        outcome.added(),
+        file_label,
+        name.display_name()
+    );
+    if outcome.skipped() > 0 {
+        // Writing to a `String` cannot fail.
+        let _ = write!(message, " (skipped {})", outcome.skipped());
+    }
+
+    Ok(message)
 }

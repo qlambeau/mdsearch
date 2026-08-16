@@ -20,6 +20,7 @@ pub(crate) enum CollectionCommand {
     Create(CreateCollectionArgs),
     List(ListCollectionsArgs),
     Destroy(DestroyCollectionArgs),
+    Add(AddFilesArgs),
 }
 
 #[derive(Debug, Args)]
@@ -42,4 +43,16 @@ pub(crate) struct DestroyCollectionArgs {
     pub(crate) name: String,
     #[arg(long, value_name = "PATH")]
     pub(crate) database: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct AddFilesArgs {
+    #[arg(value_name = "NAME")]
+    pub(crate) name: String,
+    #[arg(value_name = "PATH", required = true, num_args = 1..)]
+    pub(crate) paths: Vec<PathBuf>,
+    #[arg(long, value_name = "PATH")]
+    pub(crate) database: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) force: bool,
 }
