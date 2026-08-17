@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use kv_application::{
     AddFiles, AddFilesError, Clock, ClockError, FileRecord, FileStore, FileStoreError, FileSystem,
-    FileSystemError, StoredFile,
+    FileSystemError, ReconcileOutcome, StoredFile,
 };
 use kv_domain::{CollectionName, Timestamp};
 
@@ -101,7 +101,7 @@ impl FileStore for InMemoryFileStore {
         upsert: &[FileRecord],
         delete: &[PathBuf],
         _ingested_at: Timestamp,
-    ) -> Result<(), FileStoreError> {
+    ) -> Result<ReconcileOutcome, FileStoreError> {
         let stored = self
             .collections
             .get_mut(collection.name_key())
@@ -121,7 +121,7 @@ impl FileStore for InMemoryFileStore {
             }
         }
 
-        Ok(())
+        Ok(ReconcileOutcome::new(0))
     }
 }
 

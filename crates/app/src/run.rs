@@ -4,15 +4,18 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use kv_application::{
-    AddFiles, CreateCollection, DestroyCollection, ListCollections, UpdateCollection,
-    UpdateOutcome, UpdateTarget,
+    AddFiles, CreateCollection, DestroyCollection, IndexState, IndexStatus, ListCollections,
+    ReadIndexStatus, SearchLexical, SearchResultSet, SearchScope, UpdateCollection, UpdateOutcome,
+    UpdateTarget,
 };
 use kv_domain::CollectionName;
 use kv_infrastructure::{SystemClock, SystemFileSystem};
-use kv_store_sqlite::{SqliteCollectionStore, SqliteFileStore};
+use kv_store_sqlite::{
+    SqliteCollectionStore, SqliteFileStore, SqliteLexicalIndexStore, SqliteLexicalSearchStore,
+};
 
 use crate::AppError;
-use crate::cli::{Cli, CollectionCommand, Command};
+use crate::cli::{Cli, CollectionCommand, Command, IndexCommand};
 
 /// Executes one `mdsearch` CLI invocation with an injected home directory.
 ///
@@ -62,6 +65,16 @@ where
                 )
             }
         }
+        Command::Index(IndexCommand::Status(arguments)) => {
+            index_status(arguments.database, home_directory)
+        }
+        Command::Search(arguments) => search(
+            &arguments.query,
+            arguments.collection.as_deref(),
+            arguments.limit,
+            arguments.database,
+            home_directory,
+        ),
     }
 }
 
@@ -190,6 +203,84 @@ fn update_all_collections(
     Ok(lines.join("\n"))
 }
 
+fn index_status(
+    database_override: Option<PathBuf>,
+    home_directory: &Path,
+) -> Result<String, AppError> {
+    let database_path = database_override
+        .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
+    let store = SqliteLexicalIndexStore::open(&database_path)?;
+    let use_case = ReadIndexStatus::new(store);
+    let statuses = use_case.execute()?;
+
+    Ok(statuses
+        .iter()
+        .map(render_index_status)
+        .collect::<Vec<_>>()
+        .join("\n"))
+}
+
+fn search(
+    query: &str,
+    collection_name: Option<&str>,
+    limit: u16,
+    database_override: Option<PathBuf>,
+    home_directory: &Path,
+) -> Result<String, AppError> {
+    if query.trim().is_empty() {
+        return Err(AppError::Search(kv_application::SearchError::EmptyQuery));
+    }
+
+    let database_path = database_override
+        .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
+    let store = SqliteLexicalSearchStore::open(&database_path)?;
+    let use_case = SearchLexical::new(store);
+
+    let collection = collection_name.map(CollectionName::try_from).transpose()?;
+    let scope = match collection.as_ref() {
+        Some(collection) => SearchScope::Collection(collection),
+        None => SearchScope::All,
+    };
+
+    let set = use_case.execute(query, usize::from(limit), scope)?;
+
+    Ok(render_search_results(&set))
+}
+
+fn render_search_results(set: &SearchResultSet) -> String {
+    let mut lines = Vec::new();
+    for (index, result) in set.results().iter().enumerate() {
+        lines.push(format!(
+            "{}. {} ({}, score {:.3})",
+            index + 1,
+            result.path().display(),
+            result.kind().as_str(),
+            result.score()
+        ));
+        lines.push(result.text().to_owned());
+    }
+    if !set.results().is_empty() {
+        lines.push(format!("{} match(es)", set.total()));
+    }
+    lines.join("\n")
+}
+
+fn render_index_status(status: &IndexStatus) -> String {
+    match (status.state(), status.built_at()) {
+        (IndexState::Built, Some(timestamp)) => format!(
+            "collection \"{}\": lexical index built, {} file(s), {} passage(s), built at {}",
+            status.collection().display_name(),
+            status.file_count(),
+            status.passage_count(),
+            timestamp.as_unix_seconds()
+        ),
+        _ => format!(
+            "collection \"{}\": lexical index not built",
+            status.collection().display_name()
+        ),
+    }
+}
+
 fn format_update(display_name: &str, outcome: &UpdateOutcome) -> String {
     let mut line = format!(
         "updated collection \"{display_name}\": added {}, modified {}, deleted {}",
@@ -200,6 +291,14 @@ fn format_update(display_name: &str, outcome: &UpdateOutcome) -> String {
     if outcome.skipped() > 0 {
         // Writing to a `String` cannot fail.
         let _ = write!(line, " (skipped {})", outcome.skipped());
+    }
+    if outcome.malformed_frontmatter() > 0 {
+        // Writing to a `String` cannot fail.
+        let _ = write!(
+            line,
+            " ({} malformed frontmatter)",
+            outcome.malformed_frontmatter()
+        );
     }
     line
 }

@@ -110,3 +110,50 @@ pub enum UpdateCollectionError {
     #[error(transparent)]
     FileStore(#[from] FileStoreError),
 }
+
+/// Describes a failure while reading lexical index state.
+#[derive(Debug, Error)]
+pub enum IndexStoreError {
+    /// The database operation failed after it was opened.
+    #[error("index storage failed")]
+    Storage(#[source] Box<dyn Error + Send + Sync>),
+}
+
+/// Describes a failure from the index-status use case.
+#[derive(Debug, Error)]
+pub enum IndexStatusError {
+    /// The index store rejected or failed the status read.
+    #[error(transparent)]
+    Store(#[from] IndexStoreError),
+}
+
+/// Describes a failure while searching the lexical index.
+#[derive(Debug, Error)]
+pub enum SearchStoreError {
+    /// The requested collection does not exist.
+    #[error("collection not found")]
+    CollectionNotFound,
+    /// The requested collection's index has never been built.
+    #[error("lexical index is not built")]
+    IndexNotBuilt,
+    /// The query is not valid FTS5 match syntax.
+    #[error("invalid query: {message}")]
+    InvalidQuery {
+        /// The engine's description of the query problem.
+        message: String,
+    },
+    /// The database operation failed after it was opened.
+    #[error("search storage failed")]
+    Storage(#[source] Box<dyn Error + Send + Sync>),
+}
+
+/// Describes a failure from the lexical-search use case.
+#[derive(Debug, Error)]
+pub enum SearchError {
+    /// The query is empty or whitespace-only.
+    #[error("query is empty")]
+    EmptyQuery,
+    /// The search store rejected or failed the search.
+    #[error(transparent)]
+    Store(#[from] SearchStoreError),
+}
