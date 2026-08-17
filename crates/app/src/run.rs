@@ -5,11 +5,14 @@ use std::path::{Path, PathBuf};
 use clap::Parser;
 use kv_application::{
     AddFiles, CreateCollection, DestroyCollection, IndexState, IndexStatus, ListCollections,
-    ReadIndexStatus, UpdateCollection, UpdateOutcome, UpdateTarget,
+    ReadIndexStatus, SearchLexical, SearchResultSet, SearchScope, UpdateCollection, UpdateOutcome,
+    UpdateTarget,
 };
 use kv_domain::CollectionName;
 use kv_infrastructure::{SystemClock, SystemFileSystem};
-use kv_store_sqlite::{SqliteCollectionStore, SqliteFileStore, SqliteLexicalIndexStore};
+use kv_store_sqlite::{
+    SqliteCollectionStore, SqliteFileStore, SqliteLexicalIndexStore, SqliteLexicalSearchStore,
+};
 
 use crate::AppError;
 use crate::cli::{Cli, CollectionCommand, Command, IndexCommand};
@@ -65,6 +68,13 @@ where
         Command::Index(IndexCommand::Status(arguments)) => {
             index_status(arguments.database, home_directory)
         }
+        Command::Search(arguments) => search(
+            &arguments.query,
+            arguments.collection.as_deref(),
+            arguments.limit,
+            arguments.database,
+            home_directory,
+        ),
     }
 }
 
@@ -208,6 +218,51 @@ fn index_status(
         .map(render_index_status)
         .collect::<Vec<_>>()
         .join("\n"))
+}
+
+fn search(
+    query: &str,
+    collection_name: Option<&str>,
+    limit: u16,
+    database_override: Option<PathBuf>,
+    home_directory: &Path,
+) -> Result<String, AppError> {
+    if query.trim().is_empty() {
+        return Err(AppError::Search(kv_application::SearchError::EmptyQuery));
+    }
+
+    let database_path = database_override
+        .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
+    let store = SqliteLexicalSearchStore::open(&database_path)?;
+    let use_case = SearchLexical::new(store);
+
+    let collection = collection_name.map(CollectionName::try_from).transpose()?;
+    let scope = match collection.as_ref() {
+        Some(collection) => SearchScope::Collection(collection),
+        None => SearchScope::All,
+    };
+
+    let set = use_case.execute(query, usize::from(limit), scope)?;
+
+    Ok(render_search_results(&set))
+}
+
+fn render_search_results(set: &SearchResultSet) -> String {
+    let mut lines = Vec::new();
+    for (index, result) in set.results().iter().enumerate() {
+        lines.push(format!(
+            "{}. {} ({}, score {:.3})",
+            index + 1,
+            result.path().display(),
+            result.kind().as_str(),
+            result.score()
+        ));
+        lines.push(result.text().to_owned());
+    }
+    if !set.results().is_empty() {
+        lines.push(format!("{} match(es)", set.total()));
+    }
+    lines.join("\n")
 }
 
 fn render_index_status(status: &IndexStatus) -> String {

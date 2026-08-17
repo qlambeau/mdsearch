@@ -15,6 +15,7 @@ pub(crate) enum Command {
     Collection(CollectionCommand),
     #[command(subcommand)]
     Index(IndexCommand),
+    Search(SearchArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -33,6 +34,19 @@ pub(crate) enum IndexCommand {
 
 #[derive(Debug, Args)]
 pub(crate) struct IndexStatusArgs {
+    #[arg(long, value_name = "PATH")]
+    pub(crate) database: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SearchArgs {
+    #[arg(value_name = "QUERY")]
+    pub(crate) query: String,
+    #[arg(long, value_name = "NAME")]
+    pub(crate) collection: Option<String>,
+    #[arg(long, value_name = "N", default_value_t = 10)]
+    #[arg(value_parser = clap::value_parser!(u16).range(1..=100))]
+    pub(crate) limit: u16,
     #[arg(long, value_name = "PATH")]
     pub(crate) database: Option<PathBuf>,
 }

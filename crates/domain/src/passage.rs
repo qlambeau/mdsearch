@@ -30,6 +30,19 @@ impl PassageKind {
             Self::Summary => "summary",
         }
     }
+
+    /// Reconstructs a passage kind from its stable database key.
+    #[must_use]
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "body" => Some(Self::Body),
+            "title" => Some(Self::Title),
+            "tags" => Some(Self::Tags),
+            "aliases" => Some(Self::Aliases),
+            "summary" => Some(Self::Summary),
+            _ => None,
+        }
+    }
 }
 
 /// A single indexed passage of a markdown file.
@@ -367,6 +380,24 @@ mod tests {
         assert_eq!(PassageKind::Tags.as_str(), "tags");
         assert_eq!(PassageKind::Aliases.as_str(), "aliases");
         assert_eq!(PassageKind::Summary.as_str(), "summary");
+    }
+
+    /// Covers: `from_key` round-trips every kind from its stable key.
+    #[test]
+    fn from_key_round_trips_every_kind() {
+        assert_eq!(PassageKind::from_key("body"), Some(PassageKind::Body));
+        assert_eq!(PassageKind::from_key("title"), Some(PassageKind::Title));
+        assert_eq!(PassageKind::from_key("tags"), Some(PassageKind::Tags));
+        assert_eq!(PassageKind::from_key("aliases"), Some(PassageKind::Aliases));
+        assert_eq!(PassageKind::from_key("summary"), Some(PassageKind::Summary));
+    }
+
+    /// Covers: `from_key` rejects unknown keys.
+    #[test]
+    fn from_key_rejects_unknown_keys() {
+        assert_eq!(PassageKind::from_key("frontmatter"), None);
+        assert_eq!(PassageKind::from_key(""), None);
+        assert_eq!(PassageKind::from_key("BODY"), None);
     }
 
     proptest! {
