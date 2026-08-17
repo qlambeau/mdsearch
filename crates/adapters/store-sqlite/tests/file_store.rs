@@ -16,9 +16,9 @@ fn name() -> Result<CollectionName, kv_domain::CollectionNameError> {
     CollectionName::try_from("Notes")
 }
 
-/// Covers: FR-001 and the schema version 3 migration.
+/// Covers: FR-001 and the schema version 4 migration.
 #[test]
-fn open_creates_the_index_tables_at_version_three() -> Result<(), Box<dyn Error>> {
+fn open_creates_the_index_tables_at_version_four() -> Result<(), Box<dyn Error>> {
     let directory = tempdir()?;
     let database_path = directory.path().join("collections.db");
     SqliteCollectionStore::open(&database_path)?;
@@ -48,12 +48,18 @@ fn open_creates_the_index_tables_at_version_three() -> Result<(), Box<dyn Error>
         [],
         |row| row.get(0),
     )?;
+    let offset_column: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('passage_files') WHERE name = 'byte_offset'",
+        [],
+        |row| row.get(0),
+    )?;
 
-    assert_eq!(version, 3);
+    assert_eq!(version, 4);
     assert_eq!(files_table, 1);
     assert_eq!(passages_table, 1);
     assert_eq!(mapping_table, 1);
     assert_eq!(state_table, 1);
+    assert_eq!(offset_column, 1);
 
     Ok(())
 }
@@ -183,7 +189,69 @@ fn migrates_a_version_one_database() -> Result<(), Box<dyn Error>> {
             row.get(0)
         })?;
 
-    assert_eq!(version, 3);
+    assert_eq!(version, 4);
+
+    Ok(())
+}
+
+/// Covers: the migration from schema version three to version four.
+#[test]
+fn migrates_a_version_three_database_adding_byte_offset() -> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let database_path = directory.path().join("collections.db");
+
+    let connection = Connection::open(&database_path)?;
+    connection.execute_batch(
+        "CREATE TABLE schema_version (version INTEGER NOT NULL);
+         INSERT INTO schema_version(version) VALUES (3);
+         CREATE TABLE collections (
+             collection_id INTEGER PRIMARY KEY,
+             display_name TEXT NOT NULL,
+             name_key TEXT NOT NULL UNIQUE,
+             created_at INTEGER NOT NULL
+         );
+         CREATE TABLE files (
+             file_id INTEGER PRIMARY KEY,
+             collection_id INTEGER NOT NULL,
+             path TEXT NOT NULL,
+             content BLOB NOT NULL,
+             content_hash TEXT NOT NULL,
+             byte_size INTEGER NOT NULL,
+             created_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL,
+             UNIQUE(collection_id, path)
+         );
+         CREATE VIRTUAL TABLE passages USING fts5(content, tokenize = 'unicode61');
+         CREATE TABLE passage_files (
+             passage_rowid INTEGER PRIMARY KEY,
+             collection_id INTEGER NOT NULL,
+             file_id INTEGER NOT NULL,
+             kind TEXT NOT NULL,
+             position INTEGER NOT NULL
+         );
+         CREATE TABLE lexical_index_state (
+             collection_id INTEGER PRIMARY KEY,
+             passage_count INTEGER NOT NULL,
+             built_at INTEGER NOT NULL
+         );",
+    )?;
+    drop(connection);
+
+    SqliteFileStore::open_for_ingestion(&database_path)?;
+
+    let connection = Connection::open(&database_path)?;
+    let version: i64 =
+        connection.query_row("SELECT MAX(version) FROM schema_version", [], |row| {
+            row.get(0)
+        })?;
+    let offset_column: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('passage_files') WHERE name = 'byte_offset'",
+        [],
+        |row| row.get(0),
+    )?;
+
+    assert_eq!(version, 4);
+    assert_eq!(offset_column, 1);
 
     Ok(())
 }

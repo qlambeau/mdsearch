@@ -4,8 +4,8 @@ use std::error::Error;
 use std::path::PathBuf;
 
 use kv_application::{
-    LexicalSearchStore, SearchError, SearchLexical, SearchResult, SearchResultSet, SearchScope,
-    SearchStoreError,
+    LexicalSearchStore, Position, SearchError, SearchLexical, SearchResult, SearchResultSet,
+    SearchScope, SearchStoreError,
 };
 use kv_domain::{CollectionName, PassageKind};
 
@@ -53,6 +53,7 @@ fn result(
         kind,
         text.to_owned(),
         score,
+        Position::new(0, 0, 1, 1),
     ))
 }
 

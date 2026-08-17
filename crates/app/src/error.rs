@@ -2,7 +2,7 @@ use thiserror::Error;
 
 use kv_application::{
     AddFilesError, CollectionStoreError, CreateCollectionError, DestroyCollectionError,
-    IndexStatusError, ListCollectionsError, SearchError, UpdateCollectionError,
+    GetFileError, IndexStatusError, ListCollectionsError, SearchError, UpdateCollectionError,
 };
 use kv_domain::CollectionNameError;
 
@@ -36,6 +36,12 @@ pub enum AppError {
     /// The lexical-search use case failed.
     #[error(transparent)]
     Search(#[from] SearchError),
+    /// The get-file use case failed.
+    #[error(transparent)]
+    GetFile(#[from] GetFileError),
+    /// The retrieved file content is not valid UTF-8.
+    #[error("file content is not valid UTF-8")]
+    NonUtf8Content,
     /// The database could not be opened or accessed.
     #[error(transparent)]
     CollectionStore(#[from] CollectionStoreError),

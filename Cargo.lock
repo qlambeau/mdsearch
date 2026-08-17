@@ -767,6 +767,7 @@ dependencies = [
  "kv-infrastructure",
  "kv-store-sqlite",
  "rstest",
+ "serde_json",
  "tempfile",
  "thiserror",
 ]

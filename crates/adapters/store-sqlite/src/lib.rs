@@ -8,12 +8,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use kv_application::{
-    CollectionStore, CollectionStoreError, FileRecord, FileStore, FileStoreError, IndexStatus,
-    IndexStoreError, LexicalIndexStore, LexicalSearchStore, ReconcileOutcome, SearchResult,
-    SearchResultSet, SearchScope, SearchStoreError, StoredFile,
+    CollectionStore, CollectionStoreError, FileRecord, FileRetrievalStore, FileRetrievalStoreError,
+    FileStore, FileStoreError, IndexStatus, IndexStoreError, LexicalIndexStore, LexicalSearchStore,
+    Position, ReconcileOutcome, RetrievedFile, SearchResult, SearchResultSet, SearchScope,
+    SearchStoreError, StoredFile,
 };
 use kv_domain::{
-    CollectionName, ContentHash, FrontmatterIssue, PassageKind, Timestamp, segment_passages,
+    CollectionName, ContentHash, FileId, FrontmatterIssue, PassageKind, Timestamp, segment_passages,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use sqlite_vector_rs::scalar;
@@ -22,7 +23,10 @@ use sqlite3_ext::Connection as ExtensionConnection;
 use sqlite3_ext::vtab::{Module, StandardModule};
 
 /// The current database schema version applied by [`migrate`].
-const CURRENT_SCHEMA_VERSION: i64 = 3;
+const CURRENT_SCHEMA_VERSION: i64 = 4;
+
+/// The schema version at which the lexical index tables exist.
+const INDEX_SCHEMA_VERSION: i64 = 3;
 
 /// Persists collection metadata in one `SQLite` database file.
 pub struct SqliteCollectionStore {
@@ -139,7 +143,8 @@ fn migrate(connection: &Connection) -> Result<(), rusqlite::Error> {
             collection_id INTEGER NOT NULL REFERENCES collections(collection_id) ON DELETE CASCADE,
             file_id INTEGER NOT NULL,
             kind TEXT NOT NULL,
-            position INTEGER NOT NULL
+            position INTEGER NOT NULL,
+            byte_offset INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS idx_passage_files_collection
             ON passage_files(collection_id);
@@ -157,6 +162,12 @@ fn migrate(connection: &Connection) -> Result<(), rusqlite::Error> {
     )?;
 
     if version < CURRENT_SCHEMA_VERSION {
+        if version < 4 && !table_has_column(connection, "passage_files", "byte_offset")? {
+            connection.execute(
+                "ALTER TABLE passage_files ADD COLUMN byte_offset INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
         connection.execute("DELETE FROM schema_version", [])?;
         connection.execute(
             "INSERT INTO schema_version(version) VALUES (?1)",
@@ -165,6 +176,22 @@ fn migrate(connection: &Connection) -> Result<(), rusqlite::Error> {
     }
 
     Ok(())
+}
+
+/// Returns whether `table` has a column named `column`.
+fn table_has_column(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+) -> Result<bool, rusqlite::Error> {
+    let mut statement = connection.prepare(&format!("PRAGMA table_info({table})"))?;
+    let columns = statement.query_map([], |row| row.get::<_, String>(1))?;
+    for name in columns {
+        if name? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 impl CollectionStore for SqliteCollectionStore {
@@ -390,11 +417,19 @@ fn rebuild_index(
                 .map_err(file_storage_failure)?;
             let rowid = transaction.last_insert_rowid();
             let position = i64::try_from(position).map_err(file_storage_failure)?;
+            let byte_offset = i64::try_from(passage.byte_offset()).map_err(file_storage_failure)?;
             transaction
                 .execute(
-                    "INSERT INTO passage_files(passage_rowid, collection_id, file_id, kind, position)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
-                    params![rowid, collection_id, file_id, passage.kind().as_str(), position],
+                    "INSERT INTO passage_files(passage_rowid, collection_id, file_id, kind, position, byte_offset)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![
+                        rowid,
+                        collection_id,
+                        file_id,
+                        passage.kind().as_str(),
+                        position,
+                        byte_offset,
+                    ],
                 )
                 .map_err(file_storage_failure)?;
             passage_count += 1;
@@ -499,7 +534,7 @@ impl SqliteLexicalIndexStore {
     fn has_index_tables(&self) -> Result<bool, IndexStoreError> {
         schema_version(&self.connection)
             .map_err(index_storage_failure)
-            .map(|version| version >= CURRENT_SCHEMA_VERSION)
+            .map(|version| version >= INDEX_SCHEMA_VERSION)
     }
 }
 
@@ -546,9 +581,9 @@ impl LexicalSearchStore for SqliteLexicalSearchStore {
             }
         };
 
-        let built = schema_version(&self.connection).map_err(search_storage_failure)?
-            >= CURRENT_SCHEMA_VERSION;
-        if !built {
+        let version = schema_version(&self.connection).map_err(search_storage_failure)?;
+        let has_index = version >= INDEX_SCHEMA_VERSION;
+        if !has_index {
             return match collection_id {
                 None => Ok(SearchResultSet::new(Vec::new(), 0)),
                 Some(_) => Err(SearchStoreError::IndexNotBuilt),
@@ -563,7 +598,7 @@ impl LexicalSearchStore for SqliteLexicalSearchStore {
             return Err(SearchStoreError::IndexNotBuilt);
         }
 
-        let results = self.search_results(query, collection_id, limit)?;
+        let results = self.search_results(query, collection_id, limit, version >= 4)?;
         let total = self.count_matches(query, collection_id)?;
 
         Ok(SearchResultSet::new(results, total))
@@ -576,21 +611,31 @@ impl SqliteLexicalSearchStore {
         query: &str,
         collection_id: Option<i64>,
         limit: i64,
+        has_offsets: bool,
     ) -> Result<Vec<SearchResult>, SearchStoreError> {
-        let sql = "SELECT c.display_name, f.path, pf.kind, passages.content,
-                          bm25(passages) AS rank
-                   FROM passages
-                   JOIN passage_files pf ON pf.passage_rowid = passages.rowid
-                   JOIN files f ON f.file_id = pf.file_id
-                   JOIN collections c ON c.collection_id = pf.collection_id
-                   JOIN lexical_index_state s ON s.collection_id = c.collection_id
-                   WHERE passages MATCH ?1 AND (?2 IS NULL OR c.collection_id = ?2)
-                   ORDER BY rank ASC, c.name_key, f.path, pf.position
-                   LIMIT ?3";
+        let offset_expression = if has_offsets {
+            "pf.byte_offset"
+        } else {
+            "NULL"
+        };
+        let sql = format!(
+            "SELECT c.display_name, f.path, pf.kind, passages.content,
+                    {offset_expression} AS byte_offset,
+                    f.content AS file_content,
+                    bm25(passages) AS rank
+             FROM passages
+             JOIN passage_files pf ON pf.passage_rowid = passages.rowid
+             JOIN files f ON f.file_id = pf.file_id
+             JOIN collections c ON c.collection_id = pf.collection_id
+             JOIN lexical_index_state s ON s.collection_id = c.collection_id
+             WHERE passages MATCH ?1 AND (?2 IS NULL OR c.collection_id = ?2)
+             ORDER BY rank ASC, c.name_key, f.path, pf.position
+             LIMIT ?3"
+        );
 
         let mut statement = self
             .connection
-            .prepare(sql)
+            .prepare(&sql)
             .map_err(search_storage_failure)?;
         let rows = statement
             .query_map(params![query, collection_id, limit], |row| {
@@ -599,25 +644,30 @@ impl SqliteLexicalSearchStore {
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
-                    row.get::<_, f64>(4)?,
+                    row.get::<_, Option<i64>>(4)?,
+                    row.get::<_, Vec<u8>>(5)?,
+                    row.get::<_, f64>(6)?,
                 ))
             })
             .map_err(search_query_failure)?;
 
         let mut results = Vec::new();
         for row in rows {
-            let (display_name, path, kind, text, rank) = row.map_err(search_query_failure)?;
+            let (display_name, path, kind, text, byte_offset, file_content, rank) =
+                row.map_err(search_query_failure)?;
             let collection =
                 CollectionName::try_from(display_name.as_str()).map_err(search_storage_failure)?;
             let kind = PassageKind::from_key(&kind).ok_or_else(|| {
                 SearchStoreError::Storage(Box::new(std::io::Error::other("unknown passage kind")))
             })?;
+            let position = compute_position(byte_offset, text.len(), &file_content);
             results.push(SearchResult::new(
                 collection,
                 PathBuf::from(path),
                 kind,
                 text,
                 -rank,
+                position,
             ));
         }
 
@@ -667,6 +717,118 @@ impl SqliteLexicalSearchStore {
             .optional()
             .map(|value| value.is_some())
     }
+}
+
+/// Retrieves stored files from an existing `SQLite` database.
+pub struct SqliteFileRetrievalStore {
+    connection: Connection,
+}
+
+impl SqliteFileRetrievalStore {
+    /// Opens an existing database without creating or initializing it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database-not-found error when the file does not exist, or a
+    /// database-unavailable error when it cannot be opened.
+    pub fn open(path: &Path) -> Result<Self, CollectionStoreError> {
+        if !path.exists() {
+            return Err(CollectionStoreError::DatabaseNotFound);
+        }
+
+        let connection = Connection::open(path).map_err(database_unavailable)?;
+
+        Ok(Self { connection })
+    }
+}
+
+impl FileRetrievalStore for SqliteFileRetrievalStore {
+    fn get_by_path(
+        &self,
+        collection: &CollectionName,
+        path: &Path,
+    ) -> Result<Option<RetrievedFile>, FileRetrievalStoreError> {
+        let collection_id = resolve_retrieval_collection_id(&self.connection, collection)?;
+        let path = path.to_string_lossy();
+        self.connection
+            .query_row(
+                "SELECT path, content FROM files
+                 WHERE collection_id = ?1 AND path = ?2 LIMIT 1",
+                params![collection_id, path.as_ref()],
+                retrieval_file_row,
+            )
+            .optional()
+            .map_err(retrieval_storage_failure)
+    }
+
+    fn get_by_id(
+        &self,
+        collection: &CollectionName,
+        id: FileId,
+    ) -> Result<Option<RetrievedFile>, FileRetrievalStoreError> {
+        let collection_id = resolve_retrieval_collection_id(&self.connection, collection)?;
+        let id = i64::try_from(id.as_u64()).map_err(retrieval_storage_failure)?;
+        self.connection
+            .query_row(
+                "SELECT path, content FROM files
+                 WHERE collection_id = ?1 AND file_id = ?2 LIMIT 1",
+                params![collection_id, id],
+                retrieval_file_row,
+            )
+            .optional()
+            .map_err(retrieval_storage_failure)
+    }
+
+    fn list_by_basename(
+        &self,
+        collection: &CollectionName,
+        basename: &str,
+    ) -> Result<Vec<RetrievedFile>, FileRetrievalStoreError> {
+        let collection_id = resolve_retrieval_collection_id(&self.connection, collection)?;
+        let mut statement = self
+            .connection
+            .prepare("SELECT path, content FROM files WHERE collection_id = ?1")
+            .map_err(retrieval_storage_failure)?;
+        let rows = statement
+            .query_map(params![collection_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })
+            .map_err(retrieval_storage_failure)?;
+
+        let mut matches = Vec::new();
+        for row in rows {
+            let (path, content) = row.map_err(retrieval_storage_failure)?;
+            let path = PathBuf::from(path);
+            let is_match = path.file_name().and_then(|name| name.to_str()) == Some(basename);
+            if is_match {
+                matches.push(RetrievedFile::new(path, content));
+            }
+        }
+
+        Ok(matches)
+    }
+}
+
+fn resolve_retrieval_collection_id(
+    connection: &Connection,
+    collection: &CollectionName,
+) -> Result<i64, FileRetrievalStoreError> {
+    connection
+        .query_row(
+            "SELECT collection_id FROM collections WHERE name_key = ?1 LIMIT 1",
+            params![collection.name_key()],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(retrieval_storage_failure)?
+        .ok_or(FileRetrievalStoreError::CollectionNotFound)
+}
+
+fn retrieval_file_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RetrievedFile> {
+    Ok(RetrievedFile::new(
+        PathBuf::from(row.get::<_, String>(0)?),
+        row.get::<_, Vec<u8>>(1)?,
+    ))
 }
 
 fn schema_version(connection: &Connection) -> Result<i64, rusqlite::Error> {
@@ -745,6 +907,10 @@ fn search_storage_failure(error: impl Error + Send + Sync + 'static) -> SearchSt
     SearchStoreError::Storage(Box::new(error))
 }
 
+fn retrieval_storage_failure(error: impl Error + Send + Sync + 'static) -> FileRetrievalStoreError {
+    FileRetrievalStoreError::Storage(Box::new(error))
+}
+
 /// Maps a search execution failure, distinguishing an FTS5 query problem.
 fn search_query_failure(error: rusqlite::Error) -> SearchStoreError {
     match &error {
@@ -755,6 +921,29 @@ fn search_query_failure(error: rusqlite::Error) -> SearchStoreError {
         }
         _ => SearchStoreError::Storage(Box::new(error)),
     }
+}
+
+/// Computes a passage's position from its stored byte offset and file content.
+///
+/// When the offset is unknown (a database not yet migrated to schema version
+/// 4), the line range is reported as unknown (0) while the byte length is kept.
+fn compute_position(byte_offset: Option<i64>, byte_length: usize, content: &[u8]) -> Position {
+    let Some(offset) = byte_offset.and_then(|value| usize::try_from(value).ok()) else {
+        return Position::new(0, byte_length, 0, 0);
+    };
+    let line_start = content
+        .iter()
+        .take(offset)
+        .filter(|&&byte| byte == b'\n')
+        .count()
+        + 1;
+    let line_end = content
+        .iter()
+        .take(offset.saturating_add(byte_length))
+        .filter(|&&byte| byte == b'\n')
+        .count()
+        + 1;
+    Position::new(offset, byte_length, line_start, line_end)
 }
 
 #[cfg(test)]

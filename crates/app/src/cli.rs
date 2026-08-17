@@ -16,6 +16,7 @@ pub(crate) enum Command {
     #[command(subcommand)]
     Index(IndexCommand),
     Search(SearchArgs),
+    Get(GetArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -47,6 +48,18 @@ pub(crate) struct SearchArgs {
     #[arg(long, value_name = "N", default_value_t = 10)]
     #[arg(value_parser = clap::value_parser!(u16).range(1..=100))]
     pub(crate) limit: u16,
+    #[arg(long)]
+    pub(crate) json: bool,
+    #[arg(long, value_name = "PATH")]
+    pub(crate) database: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct GetArgs {
+    #[arg(value_name = "COLLECTION")]
+    pub(crate) collection: String,
+    #[arg(value_name = "NAME_OR_ID")]
+    pub(crate) name_or_id: String,
     #[arg(long, value_name = "PATH")]
     pub(crate) database: Option<PathBuf>,
 }

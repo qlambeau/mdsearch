@@ -315,6 +315,33 @@ fn treats_a_pre_v3_database_as_having_no_built_indexes() -> Result<(), Box<dyn E
     Ok(())
 }
 
+/// Covers: FR-001 and FR-007 — results carry byte and line ranges.
+#[test]
+fn results_carry_byte_and_line_ranges() -> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let notes = name("Notes")?;
+    build(
+        directory.path(),
+        &notes,
+        &[("a.md", "line one\nline two\n\nborrowing rules\n\nline five")],
+    )?;
+
+    let store = SqliteLexicalSearchStore::open(&directory.path().join("collections.db"))?;
+    let set = store.search("borrowing", 10, SearchScope::All)?;
+
+    let single = set
+        .results()
+        .first()
+        .ok_or_else(|| std::io::Error::other("expected one result"))?;
+    let position = single.position();
+    assert_eq!(position.byte_offset(), 19);
+    assert_eq!(position.byte_length(), 15);
+    assert_eq!(position.line_start(), 4);
+    assert_eq!(position.line_end(), 4);
+
+    Ok(())
+}
+
 /// Covers: FR-013 — the search store reports a missing database.
 #[test]
 fn reports_a_missing_database() -> Result<(), Box<dyn Error>> {

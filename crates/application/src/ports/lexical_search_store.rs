@@ -13,6 +13,57 @@ pub enum SearchScope<'a> {
     Collection(&'a CollectionName),
 }
 
+/// The location of a passage within its file.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Position {
+    byte_offset: usize,
+    byte_length: usize,
+    line_start: usize,
+    line_end: usize,
+}
+
+impl Position {
+    /// Creates a position from its byte and 1-based inclusive line ranges.
+    #[must_use]
+    pub const fn new(
+        byte_offset: usize,
+        byte_length: usize,
+        line_start: usize,
+        line_end: usize,
+    ) -> Self {
+        Self {
+            byte_offset,
+            byte_length,
+            line_start,
+            line_end,
+        }
+    }
+
+    /// Returns the byte offset of the passage in its file.
+    #[must_use]
+    pub const fn byte_offset(&self) -> usize {
+        self.byte_offset
+    }
+
+    /// Returns the byte length of the passage.
+    #[must_use]
+    pub const fn byte_length(&self) -> usize {
+        self.byte_length
+    }
+
+    /// Returns the 1-based inclusive first line of the passage.
+    #[must_use]
+    pub const fn line_start(&self) -> usize {
+        self.line_start
+    }
+
+    /// Returns the 1-based inclusive last line of the passage.
+    #[must_use]
+    pub const fn line_end(&self) -> usize {
+        self.line_end
+    }
+}
+
 /// One ranked passage match.
 #[derive(Clone, Debug)]
 pub struct SearchResult {
@@ -21,6 +72,7 @@ pub struct SearchResult {
     kind: PassageKind,
     text: String,
     score: f64,
+    position: Position,
 }
 
 impl SearchResult {
@@ -32,6 +84,7 @@ impl SearchResult {
         kind: PassageKind,
         text: String,
         score: f64,
+        position: Position,
     ) -> Self {
         Self {
             collection,
@@ -39,6 +92,7 @@ impl SearchResult {
             kind,
             text,
             score,
+            position,
         }
     }
 
@@ -70,6 +124,12 @@ impl SearchResult {
     #[must_use]
     pub const fn score(&self) -> f64 {
         self.score
+    }
+
+    /// Returns the passage's position in its file.
+    #[must_use]
+    pub const fn position(&self) -> Position {
+        self.position
     }
 }
 
