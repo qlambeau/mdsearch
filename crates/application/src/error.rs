@@ -110,3 +110,19 @@ pub enum UpdateCollectionError {
     #[error(transparent)]
     FileStore(#[from] FileStoreError),
 }
+
+/// Describes a failure while reading lexical index state.
+#[derive(Debug, Error)]
+pub enum IndexStoreError {
+    /// The database operation failed after it was opened.
+    #[error("index storage failed")]
+    Storage(#[source] Box<dyn Error + Send + Sync>),
+}
+
+/// Describes a failure from the index-status use case.
+#[derive(Debug, Error)]
+pub enum IndexStatusError {
+    /// The index store rejected or failed the status read.
+    #[error(transparent)]
+    Store(#[from] IndexStoreError),
+}

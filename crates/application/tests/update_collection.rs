@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use kv_application::{
     Clock, ClockError, FileRecord, FileStore, FileStoreError, FileSystem, FileSystemError,
-    StoredFile, UpdateCollection, UpdateTarget,
+    ReconcileOutcome, StoredFile, UpdateCollection, UpdateTarget,
 };
 use kv_domain::{CollectionName, Timestamp};
 
@@ -58,6 +58,7 @@ impl FileSystem for InMemoryFileSystem {
 #[derive(Default)]
 struct InMemoryFileStore {
     collections: BTreeMap<String, Vec<FileRecord>>,
+    malformed_frontmatter: usize,
 }
 
 impl InMemoryFileStore {
@@ -72,6 +73,10 @@ impl InMemoryFileStore {
             .entry(collection.name_key().to_owned())
             .or_default()
             .push(FileRecord::new(PathBuf::from(path), content.to_vec()));
+    }
+
+    fn set_malformed_frontmatter(&mut self, count: usize) {
+        self.malformed_frontmatter = count;
     }
 }
 
@@ -108,7 +113,7 @@ impl FileStore for InMemoryFileStore {
         upsert: &[FileRecord],
         delete: &[PathBuf],
         _ingested_at: Timestamp,
-    ) -> Result<(), FileStoreError> {
+    ) -> Result<ReconcileOutcome, FileStoreError> {
         let stored = self
             .collections
             .get_mut(collection.name_key())
@@ -128,7 +133,7 @@ impl FileStore for InMemoryFileStore {
             }
         }
 
-        Ok(())
+        Ok(ReconcileOutcome::new(self.malformed_frontmatter))
     }
 }
 
@@ -284,6 +289,28 @@ fn skips_unreadable_paths_when_forced() -> Result<(), Box<dyn Error>> {
 
     assert_eq!(outcome.added(), 1);
     assert_eq!(outcome.skipped(), 1);
+
+    Ok(())
+}
+
+/// Covers: FR-006 — the reconcile malformed-frontmatter count is surfaced.
+#[test]
+fn reports_malformed_frontmatter_from_the_store() -> Result<(), Box<dyn Error>> {
+    let collection = collection()?;
+    let mut filesystem = InMemoryFileSystem::default();
+    filesystem.insert("a.md", b"alpha");
+    let mut store = InMemoryFileStore::default();
+    store.add_collection(&collection);
+    store.set_malformed_frontmatter(2);
+    let mut use_case = UpdateCollection::new(filesystem, store, FixedClock);
+
+    let outcome = use_case.execute(
+        &collection,
+        UpdateTarget::Paths(&[PathBuf::from("a.md")]),
+        false,
+    )?;
+
+    assert_eq!(outcome.malformed_frontmatter(), 2);
 
     Ok(())
 }

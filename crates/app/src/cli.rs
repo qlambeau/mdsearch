@@ -13,6 +13,8 @@ pub(crate) struct Cli {
 pub(crate) enum Command {
     #[command(subcommand)]
     Collection(CollectionCommand),
+    #[command(subcommand)]
+    Index(IndexCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -22,6 +24,17 @@ pub(crate) enum CollectionCommand {
     Destroy(DestroyCollectionArgs),
     Add(AddFilesArgs),
     Update(UpdateCollectionArgs),
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum IndexCommand {
+    Status(IndexStatusArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct IndexStatusArgs {
+    #[arg(long, value_name = "PATH")]
+    pub(crate) database: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]

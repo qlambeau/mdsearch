@@ -2,7 +2,7 @@ use thiserror::Error;
 
 use kv_application::{
     AddFilesError, CollectionStoreError, CreateCollectionError, DestroyCollectionError,
-    ListCollectionsError, UpdateCollectionError,
+    IndexStatusError, ListCollectionsError, UpdateCollectionError,
 };
 use kv_domain::CollectionNameError;
 
@@ -30,6 +30,9 @@ pub enum AppError {
     /// The update-collection use case failed.
     #[error(transparent)]
     UpdateCollection(#[from] UpdateCollectionError),
+    /// The index-status use case failed.
+    #[error(transparent)]
+    IndexStatus(#[from] IndexStatusError),
     /// The database could not be opened or accessed.
     #[error(transparent)]
     CollectionStore(#[from] CollectionStoreError),

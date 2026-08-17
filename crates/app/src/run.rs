@@ -4,15 +4,15 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use kv_application::{
-    AddFiles, CreateCollection, DestroyCollection, ListCollections, UpdateCollection,
-    UpdateOutcome, UpdateTarget,
+    AddFiles, CreateCollection, DestroyCollection, IndexState, IndexStatus, ListCollections,
+    ReadIndexStatus, UpdateCollection, UpdateOutcome, UpdateTarget,
 };
 use kv_domain::CollectionName;
 use kv_infrastructure::{SystemClock, SystemFileSystem};
-use kv_store_sqlite::{SqliteCollectionStore, SqliteFileStore};
+use kv_store_sqlite::{SqliteCollectionStore, SqliteFileStore, SqliteLexicalIndexStore};
 
 use crate::AppError;
-use crate::cli::{Cli, CollectionCommand, Command};
+use crate::cli::{Cli, CollectionCommand, Command, IndexCommand};
 
 /// Executes one `mdsearch` CLI invocation with an injected home directory.
 ///
@@ -61,6 +61,9 @@ where
                     home_directory,
                 )
             }
+        }
+        Command::Index(IndexCommand::Status(arguments)) => {
+            index_status(arguments.database, home_directory)
         }
     }
 }
@@ -190,6 +193,39 @@ fn update_all_collections(
     Ok(lines.join("\n"))
 }
 
+fn index_status(
+    database_override: Option<PathBuf>,
+    home_directory: &Path,
+) -> Result<String, AppError> {
+    let database_path = database_override
+        .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
+    let store = SqliteLexicalIndexStore::open(&database_path)?;
+    let use_case = ReadIndexStatus::new(store);
+    let statuses = use_case.execute()?;
+
+    Ok(statuses
+        .iter()
+        .map(render_index_status)
+        .collect::<Vec<_>>()
+        .join("\n"))
+}
+
+fn render_index_status(status: &IndexStatus) -> String {
+    match (status.state(), status.built_at()) {
+        (IndexState::Built, Some(timestamp)) => format!(
+            "collection \"{}\": lexical index built, {} file(s), {} passage(s), built at {}",
+            status.collection().display_name(),
+            status.file_count(),
+            status.passage_count(),
+            timestamp.as_unix_seconds()
+        ),
+        _ => format!(
+            "collection \"{}\": lexical index not built",
+            status.collection().display_name()
+        ),
+    }
+}
+
 fn format_update(display_name: &str, outcome: &UpdateOutcome) -> String {
     let mut line = format!(
         "updated collection \"{display_name}\": added {}, modified {}, deleted {}",
@@ -200,6 +236,14 @@ fn format_update(display_name: &str, outcome: &UpdateOutcome) -> String {
     if outcome.skipped() > 0 {
         // Writing to a `String` cannot fail.
         let _ = write!(line, " (skipped {})", outcome.skipped());
+    }
+    if outcome.malformed_frontmatter() > 0 {
+        // Writing to a `String` cannot fail.
+        let _ = write!(
+            line,
+            " ({} malformed frontmatter)",
+            outcome.malformed_frontmatter()
+        );
     }
     line
 }

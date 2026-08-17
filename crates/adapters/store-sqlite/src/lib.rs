@@ -8,17 +8,18 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use kv_application::{
-    CollectionStore, CollectionStoreError, FileRecord, FileStore, FileStoreError, StoredFile,
+    CollectionStore, CollectionStoreError, FileRecord, FileStore, FileStoreError, IndexStatus,
+    IndexStoreError, LexicalIndexStore, ReconcileOutcome, StoredFile,
 };
-use kv_domain::{CollectionName, ContentHash, Timestamp};
-use rusqlite::{Connection, OptionalExtension, params};
+use kv_domain::{CollectionName, ContentHash, FrontmatterIssue, Timestamp, segment_passages};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use sqlite_vector_rs::scalar;
 use sqlite_vector_rs::vtab::{Registry, VectorTable};
 use sqlite3_ext::Connection as ExtensionConnection;
 use sqlite3_ext::vtab::{Module, StandardModule};
 
 /// The current database schema version applied by [`migrate`].
-const CURRENT_SCHEMA_VERSION: i64 = 2;
+const CURRENT_SCHEMA_VERSION: i64 = 3;
 
 /// Persists collection metadata in one `SQLite` database file.
 pub struct SqliteCollectionStore {
@@ -125,6 +126,24 @@ fn migrate(connection: &Connection) -> Result<(), rusqlite::Error> {
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
             UNIQUE(collection_id, path)
+        );
+        CREATE VIRTUAL TABLE IF NOT EXISTS passages USING fts5(
+            content,
+            tokenize = 'unicode61'
+        );
+        CREATE TABLE IF NOT EXISTS passage_files (
+            passage_rowid INTEGER PRIMARY KEY,
+            collection_id INTEGER NOT NULL REFERENCES collections(collection_id) ON DELETE CASCADE,
+            file_id INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            position INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_passage_files_collection
+            ON passage_files(collection_id);
+        CREATE TABLE IF NOT EXISTS lexical_index_state (
+            collection_id INTEGER PRIMARY KEY REFERENCES collections(collection_id) ON DELETE CASCADE,
+            passage_count INTEGER NOT NULL,
+            built_at INTEGER NOT NULL
         );",
     )?;
 
@@ -272,7 +291,7 @@ impl FileStore for SqliteFileStore {
         upsert: &[FileRecord],
         delete: &[PathBuf],
         ingested_at: Timestamp,
-    ) -> Result<(), FileStoreError> {
+    ) -> Result<ReconcileOutcome, FileStoreError> {
         let ingested_at =
             i64::try_from(ingested_at.as_unix_seconds()).map_err(file_storage_failure)?;
         let transaction = self
@@ -296,7 +315,195 @@ impl FileStore for SqliteFileStore {
                 .map_err(file_storage_failure)?;
         }
 
-        transaction.commit().map_err(file_storage_failure)
+        let malformed = rebuild_index(&transaction, collection_id, ingested_at)?;
+
+        transaction.commit().map_err(file_storage_failure)?;
+
+        Ok(ReconcileOutcome::new(malformed))
+    }
+}
+
+/// Rebuilds the lexical index for a collection from its stored files.
+///
+/// Deletes the collection's existing passages and reinserts them from the
+/// current `files` rows, then records the index state. Returns the number of
+/// files whose frontmatter could not be parsed.
+fn rebuild_index(
+    transaction: &Transaction<'_>,
+    collection_id: i64,
+    built_at: i64,
+) -> Result<usize, FileStoreError> {
+    let old_rowids = {
+        let mut statement = transaction
+            .prepare("SELECT passage_rowid FROM passage_files WHERE collection_id = ?1")
+            .map_err(file_storage_failure)?;
+        let rows = statement
+            .query_map(params![collection_id], |row| row.get::<_, i64>(0))
+            .map_err(file_storage_failure)?;
+
+        let mut rowids = Vec::new();
+        for row in rows {
+            rowids.push(row.map_err(file_storage_failure)?);
+        }
+        rowids
+    };
+
+    for rowid in old_rowids {
+        transaction
+            .execute("DELETE FROM passages WHERE rowid = ?1", params![rowid])
+            .map_err(file_storage_failure)?;
+    }
+
+    transaction
+        .execute(
+            "DELETE FROM passage_files WHERE collection_id = ?1",
+            params![collection_id],
+        )
+        .map_err(file_storage_failure)?;
+
+    let mut statement = transaction
+        .prepare("SELECT file_id, content FROM files WHERE collection_id = ?1 ORDER BY file_id")
+        .map_err(file_storage_failure)?;
+    let rows = statement
+        .query_map(params![collection_id], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })
+        .map_err(file_storage_failure)?;
+
+    let mut malformed = 0usize;
+    let mut passage_count = 0i64;
+    for row in rows {
+        let (file_id, content) = row.map_err(file_storage_failure)?;
+        let (passages, issue) = segment_passages(&content);
+        if matches!(issue, Some(FrontmatterIssue::Malformed)) {
+            malformed += 1;
+        }
+        for (position, passage) in passages.iter().enumerate() {
+            transaction
+                .execute(
+                    "INSERT INTO passages(content) VALUES (?1)",
+                    params![passage.text()],
+                )
+                .map_err(file_storage_failure)?;
+            let rowid = transaction.last_insert_rowid();
+            let position = i64::try_from(position).map_err(file_storage_failure)?;
+            transaction
+                .execute(
+                    "INSERT INTO passage_files(passage_rowid, collection_id, file_id, kind, position)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![rowid, collection_id, file_id, passage.kind().as_str(), position],
+                )
+                .map_err(file_storage_failure)?;
+            passage_count += 1;
+        }
+    }
+
+    transaction
+        .execute(
+            "INSERT INTO lexical_index_state(collection_id, passage_count, built_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(collection_id) DO UPDATE SET
+                 passage_count = excluded.passage_count,
+                 built_at = excluded.built_at",
+            params![collection_id, passage_count, built_at],
+        )
+        .map_err(file_storage_failure)?;
+
+    Ok(malformed)
+}
+
+/// Reads lexical index status from an existing `SQLite` database.
+pub struct SqliteLexicalIndexStore {
+    connection: Connection,
+}
+
+impl SqliteLexicalIndexStore {
+    /// Opens an existing database without creating or initializing it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database-not-found error when the file does not exist, or a
+    /// database-unavailable error when it cannot be opened.
+    pub fn open(path: &Path) -> Result<Self, CollectionStoreError> {
+        if !path.exists() {
+            return Err(CollectionStoreError::DatabaseNotFound);
+        }
+
+        let connection = Connection::open(path).map_err(database_unavailable)?;
+
+        Ok(Self { connection })
+    }
+}
+
+impl LexicalIndexStore for SqliteLexicalIndexStore {
+    fn status(&self) -> Result<Vec<IndexStatus>, IndexStoreError> {
+        let has_index_tables = self.has_index_tables()?;
+        let sql = if has_index_tables {
+            "SELECT c.display_name,
+                    COUNT(f.file_id) AS file_count,
+                    COALESCE(s.passage_count, 0) AS passage_count,
+                    s.built_at AS built_at
+             FROM collections c
+             LEFT JOIN files f ON f.collection_id = c.collection_id
+             LEFT JOIN lexical_index_state s ON s.collection_id = c.collection_id
+             GROUP BY c.collection_id
+             ORDER BY c.name_key"
+        } else {
+            "SELECT c.display_name, COUNT(f.file_id) AS file_count,
+                    0 AS passage_count, NULL AS built_at
+             FROM collections c
+             LEFT JOIN files f ON f.collection_id = c.collection_id
+             GROUP BY c.collection_id
+             ORDER BY c.name_key"
+        };
+
+        let mut statement = self
+            .connection
+            .prepare(sql)
+            .map_err(index_storage_failure)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                ))
+            })
+            .map_err(index_storage_failure)?;
+
+        let mut statuses = Vec::new();
+        for row in rows {
+            let (display_name, file_count, passage_count, built_at) =
+                row.map_err(index_storage_failure)?;
+            let collection =
+                CollectionName::try_from(display_name.as_str()).map_err(index_storage_failure)?;
+            statuses.push(IndexStatus::new(
+                collection,
+                usize::try_from(file_count).map_err(index_storage_failure)?,
+                usize::try_from(passage_count).map_err(index_storage_failure)?,
+                built_at
+                    .and_then(|value| u64::try_from(value).ok())
+                    .map(Timestamp::from_unix_seconds),
+            ));
+        }
+
+        Ok(statuses)
+    }
+}
+
+impl SqliteLexicalIndexStore {
+    fn has_index_tables(&self) -> Result<bool, IndexStoreError> {
+        let version: i64 = self
+            .connection
+            .query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM schema_version",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(index_storage_failure)?;
+
+        Ok(version >= CURRENT_SCHEMA_VERSION)
     }
 }
 
@@ -358,6 +565,10 @@ fn storage_failure(error: impl Error + Send + Sync + 'static) -> CollectionStore
 
 fn file_storage_failure(error: impl Error + Send + Sync + 'static) -> FileStoreError {
     FileStoreError::Storage(Box::new(error))
+}
+
+fn index_storage_failure(error: impl Error + Send + Sync + 'static) -> IndexStoreError {
+    IndexStoreError::Storage(Box::new(error))
 }
 
 #[cfg(test)]

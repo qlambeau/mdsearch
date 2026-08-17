@@ -21,17 +21,25 @@ pub struct UpdateOutcome {
     modified: usize,
     deleted: usize,
     skipped: usize,
+    malformed_frontmatter: usize,
 }
 
 impl UpdateOutcome {
     /// Creates an outcome with the given counts.
     #[must_use]
-    pub const fn new(added: usize, modified: usize, deleted: usize, skipped: usize) -> Self {
+    pub const fn new(
+        added: usize,
+        modified: usize,
+        deleted: usize,
+        skipped: usize,
+        malformed_frontmatter: usize,
+    ) -> Self {
         Self {
             added,
             modified,
             deleted,
             skipped,
+            malformed_frontmatter,
         }
     }
 
@@ -57,6 +65,12 @@ impl UpdateOutcome {
     #[must_use]
     pub const fn skipped(&self) -> usize {
         self.skipped
+    }
+
+    /// Returns the number of files with malformed frontmatter.
+    #[must_use]
+    pub const fn malformed_frontmatter(&self) -> usize {
+        self.malformed_frontmatter
     }
 }
 
@@ -110,14 +124,16 @@ where
         to_upsert.extend(stored_changes.upsert);
 
         let ingested_at: Timestamp = self.clock.now()?;
-        self.files
-            .reconcile(collection, &to_upsert, &stored_changes.delete, ingested_at)?;
+        let outcome =
+            self.files
+                .reconcile(collection, &to_upsert, &stored_changes.delete, ingested_at)?;
 
         Ok(UpdateOutcome::new(
             added,
             on_disk_modified + stored_changes.modified,
             stored_changes.deleted,
             walk_skipped + stored_changes.skipped,
+            outcome.malformed_frontmatter(),
         ))
     }
 
