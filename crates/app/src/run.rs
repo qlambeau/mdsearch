@@ -4,14 +4,15 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use kv_application::{
-    AddFiles, CreateCollection, DestroyCollection, IndexState, IndexStatus, ListCollections,
-    ReadIndexStatus, SearchLexical, SearchResultSet, SearchScope, UpdateCollection, UpdateOutcome,
-    UpdateTarget,
+    AddFiles, CreateCollection, DestroyCollection, GetFile, IndexState, IndexStatus,
+    ListCollections, ReadIndexStatus, SearchLexical, SearchResultSet, SearchScope,
+    UpdateCollection, UpdateOutcome, UpdateTarget,
 };
 use kv_domain::CollectionName;
 use kv_infrastructure::{SystemClock, SystemFileSystem};
 use kv_store_sqlite::{
-    SqliteCollectionStore, SqliteFileStore, SqliteLexicalIndexStore, SqliteLexicalSearchStore,
+    SqliteCollectionStore, SqliteFileRetrievalStore, SqliteFileStore, SqliteLexicalIndexStore,
+    SqliteLexicalSearchStore,
 };
 
 use crate::AppError;
@@ -73,6 +74,12 @@ where
             arguments.collection.as_deref(),
             arguments.limit,
             arguments.json,
+            arguments.database,
+            home_directory,
+        ),
+        Command::Get(arguments) => get_file(
+            &arguments.collection,
+            &arguments.name_or_id,
             arguments.database,
             home_directory,
         ),
@@ -256,6 +263,22 @@ fn search(
     } else {
         Ok(render_human(&set))
     }
+}
+
+fn get_file(
+    raw_collection: &str,
+    name_or_id: &str,
+    database_override: Option<PathBuf>,
+    home_directory: &Path,
+) -> Result<String, AppError> {
+    let collection = CollectionName::try_from(raw_collection)?;
+    let database_path = database_override
+        .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
+    let store = SqliteFileRetrievalStore::open(&database_path)?;
+    let use_case = GetFile::new(store);
+    let file = use_case.execute(&collection, name_or_id)?;
+
+    String::from_utf8(file.content().to_vec()).map_err(|_| AppError::NonUtf8Content)
 }
 
 fn render_human(set: &SearchResultSet) -> String {

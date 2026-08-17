@@ -157,3 +157,28 @@ pub enum SearchError {
     #[error(transparent)]
     Store(#[from] SearchStoreError),
 }
+
+/// Describes a failure while looking up a stored file for retrieval.
+#[derive(Debug, Error)]
+pub enum FileRetrievalStoreError {
+    /// The requested collection does not exist.
+    #[error("collection not found")]
+    CollectionNotFound,
+    /// The database operation failed after it was opened.
+    #[error("file retrieval storage failed")]
+    Storage(#[source] Box<dyn Error + Send + Sync>),
+}
+
+/// Describes a failure from the get-file use case.
+#[derive(Debug, Error)]
+pub enum GetFileError {
+    /// No file matches the supplied name or ID.
+    #[error("file not found")]
+    FileNotFound,
+    /// The basename matches more than one file.
+    #[error("ambiguous basename; candidate paths: {0:?}")]
+    Ambiguous(Vec<std::path::PathBuf>),
+    /// The retrieval store rejected or failed the lookup.
+    #[error(transparent)]
+    Store(#[from] FileRetrievalStoreError),
+}

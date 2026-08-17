@@ -7,6 +7,7 @@ mod add_files;
 mod create_collection;
 mod destroy_collection;
 mod error;
+mod get_file;
 mod index_status;
 mod lexical_search;
 mod list_collections;
@@ -18,15 +19,16 @@ pub use create_collection::CreateCollection;
 pub use destroy_collection::DestroyCollection;
 pub use error::{
     AddFilesError, ClockError, CollectionStoreError, CreateCollectionError, DestroyCollectionError,
-    FileStoreError, FileSystemError, IndexStatusError, IndexStoreError, ListCollectionsError,
-    SearchError, SearchStoreError, UpdateCollectionError,
+    FileRetrievalStoreError, FileStoreError, FileSystemError, GetFileError, IndexStatusError,
+    IndexStoreError, ListCollectionsError, SearchError, SearchStoreError, UpdateCollectionError,
 };
+pub use get_file::GetFile;
 pub use index_status::ReadIndexStatus;
 pub use lexical_search::SearchLexical;
 pub use list_collections::ListCollections;
 pub use ports::{
-    Clock, CollectionStore, FileRecord, FileStore, FileSystem, IndexState, IndexStatus,
-    LexicalIndexStore, LexicalSearchStore, Position, ReconcileOutcome, SearchResult,
-    SearchResultSet, SearchScope, StoredFile,
+    Clock, CollectionStore, FileRecord, FileRetrievalStore, FileStore, FileSystem, IndexState,
+    IndexStatus, LexicalIndexStore, LexicalSearchStore, Position, ReconcileOutcome, RetrievedFile,
+    SearchResult, SearchResultSet, SearchScope, StoredFile,
 };
 pub use update_collection::{UpdateCollection, UpdateOutcome, UpdateTarget};
