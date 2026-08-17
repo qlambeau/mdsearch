@@ -62,7 +62,7 @@ fn search_returns_ranked_passage_blocks_and_a_summary() -> Result<(), Box<dyn Er
     let output = run(["mdsearch", "search", "borrowing"], home.path())?;
 
     assert!(
-        output.contains(".md (body, score "),
+        output.contains(".md:1-1 (body, score "),
         "unexpected output: {output}"
     );
     assert!(output.contains("borrowing rules"));
@@ -279,6 +279,56 @@ fn search_fails_on_an_empty_query() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Covers: FR-006 — an empty query fails in JSON mode too.
+#[test]
+fn search_json_fails_on_an_empty_query() -> Result<(), Box<dyn Error>> {
+    let home = tempdir()?;
+
+    let error = run(["mdsearch", "search", "", "--json"], home.path())
+        .err()
+        .ok_or_else(|| std::io::Error::other("an empty query should fail"))?;
+
+    assert!(
+        error.to_string().contains("query is empty"),
+        "unexpected error: {error}"
+    );
+
+    Ok(())
+}
+
+/// Covers: FR-003 — `--json` honors `--limit` and reports the total.
+#[test]
+fn search_json_honors_limit_and_reports_the_total() -> Result<(), Box<dyn Error>> {
+    let home = tempdir()?;
+    create(home.path(), "Notes")?;
+    for name in ["a.md", "b.md", "c.md"] {
+        let file = home.path().join(name);
+        add_and_update(home.path(), "Notes", &file, "borrowing")?;
+    }
+
+    let output = run(
+        ["mdsearch", "search", "borrowing", "--json", "--limit", "2"],
+        home.path(),
+    )?;
+
+    let value: serde_json::Value = serde_json::from_str(&output)?;
+    assert_eq!(
+        value.get("limit").and_then(serde_json::Value::as_u64),
+        Some(2)
+    );
+    assert_eq!(
+        value.get("total").and_then(serde_json::Value::as_u64),
+        Some(3)
+    );
+    let results = value
+        .get("results")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| std::io::Error::other("results must be an array"))?;
+    assert_eq!(results.len(), 2);
+
+    Ok(())
+}
+
 /// Covers: FR-012 — no matches produce empty output.
 #[test]
 fn search_produces_empty_output_when_nothing_matches() -> Result<(), Box<dyn Error>> {
@@ -316,6 +366,142 @@ fn search_reports_a_missing_database_without_creating_it() -> Result<(), Box<dyn
 
     assert!(error.to_string().contains("does not exist"));
     assert!(!database_path.exists());
+
+    Ok(())
+}
+
+fn check_json_result(value: &serde_json::Value, expected_text: &str) {
+    assert_eq!(
+        value.get("collection").and_then(serde_json::Value::as_str),
+        Some("Notes")
+    );
+    assert_eq!(
+        value.get("kind").and_then(serde_json::Value::as_str),
+        Some("body")
+    );
+    assert_eq!(
+        value.get("text").and_then(serde_json::Value::as_str),
+        Some(expected_text)
+    );
+    let position = value.get("position").and_then(serde_json::Value::as_object);
+    assert!(position.is_some_and(|value| {
+        value
+            .get("line_start")
+            .and_then(serde_json::Value::as_u64)
+            .is_some()
+    }));
+    assert!(
+        value
+            .get("score")
+            .and_then(serde_json::Value::as_f64)
+            .is_some()
+    );
+}
+
+/// Covers: FR-002 and FR-003 — `--json` emits a structured object with results.
+#[test]
+fn search_json_emits_a_structured_object() -> Result<(), Box<dyn Error>> {
+    let home = tempdir()?;
+    let a = home.path().join("a.md");
+    create(home.path(), "Notes")?;
+    add_and_update(home.path(), "Notes", &a, "borrowing rules")?;
+
+    let output = run(["mdsearch", "search", "borrowing", "--json"], home.path())?;
+
+    let value: serde_json::Value = serde_json::from_str(&output)?;
+    assert_eq!(
+        value.get("query").and_then(serde_json::Value::as_str),
+        Some("borrowing")
+    );
+    assert_eq!(
+        value.get("scope").and_then(serde_json::Value::as_str),
+        Some("all")
+    );
+    assert_eq!(
+        value.get("limit").and_then(serde_json::Value::as_u64),
+        Some(10)
+    );
+    assert_eq!(
+        value.get("total").and_then(serde_json::Value::as_u64),
+        Some(1)
+    );
+
+    let results = value
+        .get("results")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| std::io::Error::other("results must be an array"))?;
+    assert_eq!(results.len(), 1);
+    let first = results
+        .first()
+        .ok_or_else(|| std::io::Error::other("expected one result"))?;
+    check_json_result(first, "borrowing rules");
+
+    Ok(())
+}
+
+/// Covers: FR-004 — `--json` with zero matches emits valid JSON with empty results.
+#[test]
+fn search_json_emits_empty_results_for_no_match() -> Result<(), Box<dyn Error>> {
+    let home = tempdir()?;
+    let a = home.path().join("a.md");
+    create(home.path(), "Notes")?;
+    add_and_update(home.path(), "Notes", &a, "borrowing rules")?;
+
+    let output = run(["mdsearch", "search", "zzznotaword", "--json"], home.path())?;
+
+    let value: serde_json::Value = serde_json::from_str(&output)?;
+    assert_eq!(
+        value.get("total").and_then(serde_json::Value::as_u64),
+        Some(0)
+    );
+    let results = value
+        .get("results")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| std::io::Error::other("results must be an array"))?;
+    assert!(results.is_empty());
+
+    Ok(())
+}
+
+/// Covers: FR-008 — a malformed query fails in JSON mode without emitting JSON.
+#[test]
+fn search_json_fails_clearly_on_a_malformed_query() -> Result<(), Box<dyn Error>> {
+    let home = tempdir()?;
+    let a = home.path().join("a.md");
+    create(home.path(), "Notes")?;
+    add_and_update(home.path(), "Notes", &a, "borrowing")?;
+
+    let error = run(["mdsearch", "search", "a AND", "--json"], home.path())
+        .err()
+        .ok_or_else(|| std::io::Error::other("a malformed query should fail"))?;
+
+    assert!(
+        error.to_string().contains("invalid query"),
+        "unexpected error: {error}"
+    );
+
+    Ok(())
+}
+
+/// Covers: FR-001 — the human header shows the passage line range.
+#[test]
+fn search_human_header_shows_the_line_range() -> Result<(), Box<dyn Error>> {
+    let home = tempdir()?;
+    let a = home.path().join("a.md");
+    create(home.path(), "Notes")?;
+    add_and_update(
+        home.path(),
+        "Notes",
+        &a,
+        "line one\nline two\n\nborrowing rules",
+    )?;
+
+    let output = run(["mdsearch", "search", "borrowing"], home.path())?;
+
+    assert!(
+        output.contains(".md:4-4 (body, score "),
+        "unexpected output: {output}"
+    );
 
     Ok(())
 }

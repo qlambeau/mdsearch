@@ -26,7 +26,7 @@ pub use lexical_search::SearchLexical;
 pub use list_collections::ListCollections;
 pub use ports::{
     Clock, CollectionStore, FileRecord, FileStore, FileSystem, IndexState, IndexStatus,
-    LexicalIndexStore, LexicalSearchStore, ReconcileOutcome, SearchResult, SearchResultSet,
-    SearchScope, StoredFile,
+    LexicalIndexStore, LexicalSearchStore, Position, ReconcileOutcome, SearchResult,
+    SearchResultSet, SearchScope, StoredFile,
 };
 pub use update_collection::{UpdateCollection, UpdateOutcome, UpdateTarget};

@@ -72,6 +72,7 @@ where
             &arguments.query,
             arguments.collection.as_deref(),
             arguments.limit,
+            arguments.json,
             arguments.database,
             home_directory,
         ),
@@ -224,6 +225,7 @@ fn search(
     query: &str,
     collection_name: Option<&str>,
     limit: u16,
+    json: bool,
     database_override: Option<PathBuf>,
     home_directory: &Path,
 ) -> Result<String, AppError> {
@@ -244,25 +246,80 @@ fn search(
 
     let set = use_case.execute(query, usize::from(limit), scope)?;
 
-    Ok(render_search_results(&set))
+    let scope_name = collection.as_ref().map_or_else(
+        || "all".to_owned(),
+        |collection| collection.display_name().to_owned(),
+    );
+
+    if json {
+        Ok(render_json(&set, query, &scope_name, limit))
+    } else {
+        Ok(render_human(&set))
+    }
 }
 
-fn render_search_results(set: &SearchResultSet) -> String {
+fn render_human(set: &SearchResultSet) -> String {
     let mut lines = Vec::new();
     for (index, result) in set.results().iter().enumerate() {
-        lines.push(format!(
-            "{}. {} ({}, score {:.3})",
-            index + 1,
-            result.path().display(),
-            result.kind().as_str(),
-            result.score()
-        ));
+        let position = result.position();
+        let header = if position.line_start() == 0 {
+            format!(
+                "{}. {} ({}, score {:.3})",
+                index + 1,
+                result.path().display(),
+                result.kind().as_str(),
+                result.score()
+            )
+        } else {
+            format!(
+                "{}. {}:{}-{} ({}, score {:.3})",
+                index + 1,
+                result.path().display(),
+                position.line_start(),
+                position.line_end(),
+                result.kind().as_str(),
+                result.score()
+            )
+        };
+        lines.push(header);
         lines.push(result.text().to_owned());
     }
     if !set.results().is_empty() {
         lines.push(format!("{} match(es)", set.total()));
     }
     lines.join("\n")
+}
+
+fn render_json(set: &SearchResultSet, query: &str, scope: &str, limit: u16) -> String {
+    let results: Vec<serde_json::Value> = set
+        .results()
+        .iter()
+        .map(|result| {
+            let position = result.position();
+            serde_json::json!({
+                "collection": result.collection().display_name(),
+                "path": result.path().to_string_lossy(),
+                "kind": result.kind().as_str(),
+                "text": result.text(),
+                "score": result.score(),
+                "position": {
+                    "byte_offset": position.byte_offset(),
+                    "byte_length": position.byte_length(),
+                    "line_start": position.line_start(),
+                    "line_end": position.line_end(),
+                },
+            })
+        })
+        .collect();
+
+    serde_json::json!({
+        "query": query,
+        "scope": scope,
+        "limit": limit,
+        "total": set.total(),
+        "results": results,
+    })
+    .to_string()
 }
 
 fn render_index_status(status: &IndexStatus) -> String {
