@@ -182,3 +182,63 @@ pub enum GetFileError {
     #[error(transparent)]
     Store(#[from] FileRetrievalStoreError),
 }
+
+/// Describes a failure from the embedding generator.
+#[derive(Debug, Error)]
+pub enum EmbeddingError {
+    /// The model is not supported by the embedding library.
+    #[error("embedding model {model} is not supported")]
+    UnsupportedModel {
+        /// The model that is not supported.
+        model: String,
+    },
+    /// The model's assets are not cached locally and no download was requested.
+    #[error("embedding model {model} is not available locally; pass --download to fetch it")]
+    ModelNotCached {
+        /// The model whose assets are missing.
+        model: String,
+    },
+    /// The model assets could not be downloaded.
+    #[error("embedding model {model} download failed")]
+    DownloadFailed {
+        /// The model whose assets could not be downloaded.
+        model: String,
+        /// The underlying download error.
+        #[source]
+        source: Box<dyn Error + Send + Sync>,
+    },
+    /// Embedding generation failed.
+    #[error("embedding failed")]
+    Storage(#[source] Box<dyn Error + Send + Sync>),
+}
+
+/// Describes a failure while reading or writing the semantic index.
+#[derive(Debug, Error)]
+pub enum SemanticIndexStoreError {
+    /// The requested collection does not exist.
+    #[error("collection not found")]
+    CollectionNotFound,
+    /// The database operation failed after it was opened.
+    #[error("semantic index storage failed")]
+    Storage(#[source] Box<dyn Error + Send + Sync>),
+}
+
+/// Describes a failure from the embed-collections use case.
+#[derive(Debug, Error)]
+pub enum EmbedError {
+    /// The embedding generator rejected or failed the model or embedding.
+    #[error(transparent)]
+    Generator(#[from] EmbeddingError),
+    /// The clock could not provide embed timestamps.
+    #[error(transparent)]
+    Clock(#[from] ClockError),
+    /// The semantic index store rejected or failed the operation.
+    #[error(transparent)]
+    Store(#[from] SemanticIndexStoreError),
+    /// The requested collection does not exist.
+    #[error("collection not found")]
+    CollectionNotFound,
+    /// The requested collection's lexical index has never been built.
+    #[error("lexical index is not built")]
+    IndexNotBuilt,
+}

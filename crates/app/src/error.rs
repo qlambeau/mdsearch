@@ -1,10 +1,10 @@
 use thiserror::Error;
 
 use kv_application::{
-    AddFilesError, CollectionStoreError, CreateCollectionError, DestroyCollectionError,
+    AddFilesError, CollectionStoreError, CreateCollectionError, DestroyCollectionError, EmbedError,
     GetFileError, IndexStatusError, ListCollectionsError, SearchError, UpdateCollectionError,
 };
-use kv_domain::CollectionNameError;
+use kv_domain::{CollectionNameError, EmbeddingModelError};
 
 /// Describes a user-visible failure from the `mdsearch` CLI.
 #[derive(Debug, Error)]
@@ -39,6 +39,15 @@ pub enum AppError {
     /// The get-file use case failed.
     #[error(transparent)]
     GetFile(#[from] GetFileError),
+    /// The embed-collections use case failed.
+    #[error(transparent)]
+    Embed(#[from] EmbedError),
+    /// The embedding model name is invalid.
+    #[error(transparent)]
+    InvalidEmbeddingModel(#[from] EmbeddingModelError),
+    /// The embed-collections use case completed with per-collection failures.
+    #[error("{0}")]
+    EmbedPartial(String),
     /// The retrieved file content is not valid UTF-8.
     #[error("file content is not valid UTF-8")]
     NonUtf8Content,

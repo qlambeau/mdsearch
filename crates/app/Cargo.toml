@@ -8,6 +8,7 @@ license.workspace = true
 clap.workspace = true
 kv-application.workspace = true
 kv-domain.workspace = true
+kv-embed-fastembed.workspace = true
 kv-infrastructure.workspace = true
 kv-store-sqlite.workspace = true
 serde_json.workspace = true

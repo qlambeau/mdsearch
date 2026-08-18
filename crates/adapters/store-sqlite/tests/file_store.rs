@@ -16,9 +16,9 @@ fn name() -> Result<CollectionName, kv_domain::CollectionNameError> {
     CollectionName::try_from("Notes")
 }
 
-/// Covers: FR-001 and the schema version 4 migration.
+/// Covers: FR-001 and the schema version 5 migration.
 #[test]
-fn open_creates_the_index_tables_at_version_four() -> Result<(), Box<dyn Error>> {
+fn open_creates_the_tables_at_version_five() -> Result<(), Box<dyn Error>> {
     let directory = tempdir()?;
     let database_path = directory.path().join("collections.db");
     SqliteCollectionStore::open(&database_path)?;
@@ -54,7 +54,7 @@ fn open_creates_the_index_tables_at_version_four() -> Result<(), Box<dyn Error>>
         |row| row.get(0),
     )?;
 
-    assert_eq!(version, 4);
+    assert_eq!(version, 5);
     assert_eq!(files_table, 1);
     assert_eq!(passages_table, 1);
     assert_eq!(mapping_table, 1);
@@ -162,9 +162,9 @@ fn reports_collection_not_found() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Covers: the schema version 1 to 2 migration.
+/// Covers: the schema version 1 to 5 migration.
 #[test]
-fn migrates_a_version_one_database() -> Result<(), Box<dyn Error>> {
+fn migrates_a_version_one_database_to_current() -> Result<(), Box<dyn Error>> {
     let directory = tempdir()?;
     let database_path = directory.path().join("collections.db");
 
@@ -189,14 +189,14 @@ fn migrates_a_version_one_database() -> Result<(), Box<dyn Error>> {
             row.get(0)
         })?;
 
-    assert_eq!(version, 4);
+    assert_eq!(version, 5);
 
     Ok(())
 }
 
-/// Covers: the migration from schema version three to version four.
+/// Covers: the migration from schema version three to the current version.
 #[test]
-fn migrates_a_version_three_database_adding_byte_offset() -> Result<(), Box<dyn Error>> {
+fn migrates_a_version_three_database_to_current() -> Result<(), Box<dyn Error>> {
     let directory = tempdir()?;
     let database_path = directory.path().join("collections.db");
 
@@ -250,7 +250,7 @@ fn migrates_a_version_three_database_adding_byte_offset() -> Result<(), Box<dyn 
         |row| row.get(0),
     )?;
 
-    assert_eq!(version, 4);
+    assert_eq!(version, 5);
     assert_eq!(offset_column, 1);
 
     Ok(())
