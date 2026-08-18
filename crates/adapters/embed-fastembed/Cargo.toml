@@ -1,0 +1,17 @@
+[package]
+name = "kv-embed-fastembed"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+fastembed.workspace = true
+kv-application.workspace = true
+kv-domain.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

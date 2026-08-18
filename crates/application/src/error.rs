@@ -182,3 +182,129 @@ pub enum GetFileError {
     #[error(transparent)]
     Store(#[from] FileRetrievalStoreError),
 }
+
+/// Describes a failure from the embedding generator.
+#[derive(Debug, Error)]
+pub enum EmbeddingError {
+    /// The model is not supported by the embedding library.
+    #[error("embedding model {model} is not supported")]
+    UnsupportedModel {
+        /// The model that is not supported.
+        model: String,
+    },
+    /// The model's assets are not cached locally and no download was requested.
+    #[error("embedding model {model} is not available locally; pass --download to fetch it")]
+    ModelNotCached {
+        /// The model whose assets are missing.
+        model: String,
+    },
+    /// The model assets could not be downloaded.
+    #[error("embedding model {model} download failed")]
+    DownloadFailed {
+        /// The model whose assets could not be downloaded.
+        model: String,
+        /// The underlying download error.
+        #[source]
+        source: Box<dyn Error + Send + Sync>,
+    },
+    /// Embedding generation failed.
+    #[error("embedding failed")]
+    Storage(#[source] Box<dyn Error + Send + Sync>),
+}
+
+/// Describes a failure while reading or writing the semantic index.
+#[derive(Debug, Error)]
+pub enum SemanticIndexStoreError {
+    /// The requested collection does not exist.
+    #[error("collection not found")]
+    CollectionNotFound,
+    /// The database operation failed after it was opened.
+    #[error("semantic index storage failed")]
+    Storage(#[source] Box<dyn Error + Send + Sync>),
+}
+
+/// Describes a failure from the re-ranker.
+#[derive(Debug, Error)]
+pub enum RerankError {
+    /// The model is not supported by the re-ranking library.
+    #[error("re-ranker model {model} is not supported")]
+    UnsupportedModel {
+        /// The model that is not supported.
+        model: String,
+    },
+    /// The model's assets are not cached locally and no download was requested.
+    #[error("re-ranker model {model} is not available locally; pass --download to fetch it")]
+    ModelNotCached {
+        /// The model whose assets are missing.
+        model: String,
+    },
+    /// The model assets could not be downloaded.
+    #[error("re-ranker model {model} download failed")]
+    DownloadFailed {
+        /// The model whose assets could not be downloaded.
+        model: String,
+        /// The underlying download error.
+        #[source]
+        source: Box<dyn Error + Send + Sync>,
+    },
+    /// Re-ranking failed.
+    #[error("re-ranking failed")]
+    Storage(#[source] Box<dyn Error + Send + Sync>),
+}
+
+/// Describes a failure while searching the hybrid index.
+#[derive(Debug, Error)]
+pub enum HybridSearchStoreError {
+    /// The requested collection does not exist.
+    #[error("collection not found")]
+    CollectionNotFound,
+    /// The requested collection's lexical index has never been built.
+    #[error("lexical index is not built")]
+    IndexNotBuilt,
+    /// An in-scope collection's semantic index is stale.
+    #[error("semantic index is stale; run mdsearch embed")]
+    StaleSemanticIndex,
+    /// The database operation failed after it was opened.
+    #[error("hybrid search storage failed")]
+    Storage(#[source] Box<dyn Error + Send + Sync>),
+}
+
+/// Describes a failure from the hybrid-search use case.
+#[derive(Debug, Error)]
+pub enum HybridError {
+    /// The query is empty or whitespace-only.
+    #[error("query is empty")]
+    EmptyQuery,
+    /// The embedding generator rejected or failed the query embedding.
+    #[error(transparent)]
+    Generator(#[from] EmbeddingError),
+    /// The re-ranker rejected or failed the re-ranking stage.
+    #[error(transparent)]
+    Rerank(#[from] RerankError),
+    /// The hybrid search store rejected or failed the retrieval.
+    #[error(transparent)]
+    Store(#[from] HybridSearchStoreError),
+}
+
+/// Describes a failure from the embed-collections use case.
+#[derive(Debug, Error)]
+pub enum EmbedError {
+    /// The embedding generator rejected or failed the model or embedding.
+    #[error(transparent)]
+    Generator(#[from] EmbeddingError),
+    /// The re-ranker rejected or failed the model provisioning.
+    #[error(transparent)]
+    Reranker(#[from] RerankError),
+    /// The clock could not provide embed timestamps.
+    #[error(transparent)]
+    Clock(#[from] ClockError),
+    /// The semantic index store rejected or failed the operation.
+    #[error(transparent)]
+    Store(#[from] SemanticIndexStoreError),
+    /// The requested collection does not exist.
+    #[error("collection not found")]
+    CollectionNotFound,
+    /// The requested collection's lexical index has never been built.
+    #[error("lexical index is not built")]
+    IndexNotBuilt,
+}

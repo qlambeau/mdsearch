@@ -5,6 +5,7 @@ members = [
     "crates/domain",
     "crates/application",
     "crates/adapters/store-sqlite",
+    "crates/adapters/embed-fastembed",
     "crates/infrastructure",
     "crates/app",
     "xtask",
@@ -15,6 +16,7 @@ license = "MIT"
 
 [workspace.dependencies]
 clap = { version = "4.5", features = ["derive"] }
+fastembed = "6.0.0"
 proptest = "1.7"
 rstest = "0.25"
 rusqlite = { version = "0.28", features = ["bundled", "load_extension"] }
@@ -30,6 +32,7 @@ yaml-rust2 = { version = "0.11", default-features = false }
 kv-domain = { path = "crates/domain" }
 kv-application = { path = "crates/application" }
 kv-store-sqlite = { path = "crates/adapters/store-sqlite" }
+kv-embed-fastembed = { path = "crates/adapters/embed-fastembed" }
 kv-infrastructure = { path = "crates/infrastructure" }
 
 [workspace.lints.rust]

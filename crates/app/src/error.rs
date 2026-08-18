@@ -1,10 +1,11 @@
 use thiserror::Error;
 
 use kv_application::{
-    AddFilesError, CollectionStoreError, CreateCollectionError, DestroyCollectionError,
-    GetFileError, IndexStatusError, ListCollectionsError, SearchError, UpdateCollectionError,
+    AddFilesError, CollectionStoreError, CreateCollectionError, DestroyCollectionError, EmbedError,
+    GetFileError, HybridError, IndexStatusError, ListCollectionsError, SearchError,
+    UpdateCollectionError,
 };
-use kv_domain::CollectionNameError;
+use kv_domain::{CollectionNameError, EmbeddingModelError, RerankerModelError};
 
 /// Describes a user-visible failure from the `mdsearch` CLI.
 #[derive(Debug, Error)]
@@ -39,6 +40,21 @@ pub enum AppError {
     /// The get-file use case failed.
     #[error(transparent)]
     GetFile(#[from] GetFileError),
+    /// The embed-collections use case failed.
+    #[error(transparent)]
+    Embed(#[from] EmbedError),
+    /// The hybrid-search use case failed.
+    #[error(transparent)]
+    Hybrid(#[from] HybridError),
+    /// The embedding model name is invalid.
+    #[error(transparent)]
+    InvalidEmbeddingModel(#[from] EmbeddingModelError),
+    /// The re-ranker model name is invalid.
+    #[error(transparent)]
+    InvalidRerankerModel(#[from] RerankerModelError),
+    /// The embed-collections use case completed with per-collection failures.
+    #[error("{0}")]
+    EmbedPartial(String),
     /// The retrieved file content is not valid UTF-8.
     #[error("file content is not valid UTF-8")]
     NonUtf8Content,

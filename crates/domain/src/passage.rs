@@ -4,7 +4,7 @@ use yaml_rust2::Yaml;
 use yaml_rust2::YamlLoader;
 
 /// The kind of content a passage contains.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum PassageKind {
     /// A body paragraph.
     Body,

@@ -3,18 +3,23 @@
 
 //! `SQLite` adapter for the `mdsearch` application ports.
 
+mod hybrid;
+
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use kv_application::{
-    CollectionStore, CollectionStoreError, FileRecord, FileRetrievalStore, FileRetrievalStoreError,
-    FileStore, FileStoreError, IndexStatus, IndexStoreError, LexicalIndexStore, LexicalSearchStore,
-    Position, ReconcileOutcome, RetrievedFile, SearchResult, SearchResultSet, SearchScope,
-    SearchStoreError, StoredFile,
+    CollectionStore, CollectionStoreError, EmbedTarget, FileRecord, FileRetrievalStore,
+    FileRetrievalStoreError, FileStore, FileStoreError, IndexStatus, IndexStoreError,
+    LexicalIndexStore, LexicalSearchStore, Position, ReconcileOutcome, RetrievedFile, SearchResult,
+    SearchResultSet, SearchScope, SearchStoreError, SemanticIndexStore, SemanticIndexStoreError,
+    StoredFile,
 };
 use kv_domain::{
-    CollectionName, ContentHash, FileId, FrontmatterIssue, PassageKind, Timestamp, segment_passages,
+    CollectionName, ContentHash, Embedding, EmbeddingModel, FileId, FrontmatterIssue, PassageKind,
+    RerankerModel, SemanticIndexStatus, SemanticPassage, Timestamp, file_set_fingerprint,
+    segment_passages,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use sqlite_vector_rs::scalar;
@@ -22,11 +27,16 @@ use sqlite_vector_rs::vtab::{Registry, VectorTable};
 use sqlite3_ext::Connection as ExtensionConnection;
 use sqlite3_ext::vtab::{Module, StandardModule};
 
+pub use hybrid::SqliteHybridSearchStore;
+
 /// The current database schema version applied by [`migrate`].
-const CURRENT_SCHEMA_VERSION: i64 = 4;
+const CURRENT_SCHEMA_VERSION: i64 = 5;
 
 /// The schema version at which the lexical index tables exist.
 const INDEX_SCHEMA_VERSION: i64 = 3;
+
+/// The dimension of vectors stored in the `embeddings` table.
+const EMBEDDING_DIMENSION: i64 = 384;
 
 /// Persists collection metadata in one `SQLite` database file.
 pub struct SqliteCollectionStore {
@@ -92,13 +102,14 @@ impl SqliteFileStore {
 
         let connection = Connection::open(path).map_err(database_unavailable)?;
 
+        register_vector_extension(&connection).map_err(storage_failure)?;
         migrate(&connection).map_err(storage_failure)?;
 
         Ok(Self { connection })
     }
 }
 
-fn register_vector_extension(connection: &Connection) -> Result<(), sqlite3_ext::Error> {
+pub(crate) fn register_vector_extension(connection: &Connection) -> Result<(), sqlite3_ext::Error> {
     let extension_connection = ExtensionConnection::from_rusqlite(connection);
     let module = StandardModule::<VectorTable<'_>>::new()
         .with_update()
@@ -152,6 +163,23 @@ fn migrate(connection: &Connection) -> Result<(), rusqlite::Error> {
             collection_id INTEGER PRIMARY KEY REFERENCES collections(collection_id) ON DELETE CASCADE,
             passage_count INTEGER NOT NULL,
             built_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS semantic_index_state (
+            collection_id INTEGER PRIMARY KEY REFERENCES collections(collection_id) ON DELETE CASCADE,
+            file_set_fingerprint TEXT NOT NULL,
+            model TEXT NOT NULL,
+            passage_count INTEGER NOT NULL,
+            embedded_at INTEGER NOT NULL
+        );
+        CREATE VIRTUAL TABLE IF NOT EXISTS embeddings USING vector(
+            dim=384,
+            type=float4,
+            metric=cosine,
+            metadata=\"collection_id INTEGER, file_id INTEGER, kind TEXT, position INTEGER\"
         );",
     )?;
 
@@ -719,6 +747,436 @@ impl SqliteLexicalSearchStore {
     }
 }
 
+/// Reads and writes the semantic index of an existing `SQLite` database.
+pub struct SqliteSemanticIndexStore {
+    connection: Connection,
+}
+
+impl SqliteSemanticIndexStore {
+    /// Opens an existing database for embedding, migrating it to the current
+    /// schema version.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database-not-found error when the file does not exist, a
+    /// database-unavailable error when it cannot be opened, or a storage error
+    /// when the migration fails.
+    pub fn open_for_embedding(path: &Path) -> Result<Self, CollectionStoreError> {
+        if !path.exists() {
+            return Err(CollectionStoreError::DatabaseNotFound);
+        }
+
+        let connection = Connection::open(path).map_err(database_unavailable)?;
+
+        register_vector_extension(&connection).map_err(storage_failure)?;
+        migrate(&connection).map_err(storage_failure)?;
+
+        Ok(Self { connection })
+    }
+}
+
+impl SemanticIndexStore for SqliteSemanticIndexStore {
+    fn targets(&self) -> Result<Vec<EmbedTarget>, SemanticIndexStoreError> {
+        let has_index = schema_version(&self.connection).map_err(semantic_storage_failure)?
+            >= INDEX_SCHEMA_VERSION;
+
+        let sql = if has_index {
+            "SELECT c.display_name,
+                    EXISTS(SELECT 1 FROM files f WHERE f.collection_id = c.collection_id),
+                    EXISTS(SELECT 1 FROM lexical_index_state s WHERE s.collection_id = c.collection_id)
+             FROM collections c
+             ORDER BY c.name_key"
+        } else {
+            "SELECT c.display_name,
+                    EXISTS(SELECT 1 FROM files f WHERE f.collection_id = c.collection_id),
+                    0
+             FROM collections c
+             ORDER BY c.name_key"
+        };
+
+        let mut statement = self
+            .connection
+            .prepare(sql)
+            .map_err(semantic_storage_failure)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(semantic_storage_failure)?;
+
+        let mut targets = Vec::new();
+        for row in rows {
+            let (display_name, has_files, lexical_built) = row.map_err(semantic_storage_failure)?;
+            let collection = CollectionName::try_from(display_name.as_str())
+                .map_err(semantic_storage_failure)?;
+            targets.push(EmbedTarget::new(
+                collection,
+                has_files != 0,
+                lexical_built != 0,
+            ));
+        }
+
+        Ok(targets)
+    }
+
+    fn resolve(&self, collection: &CollectionName) -> Result<EmbedTarget, SemanticIndexStoreError> {
+        let collection_id = self
+            .resolve_collection_id(collection)
+            .map_err(semantic_storage_failure)?
+            .ok_or(SemanticIndexStoreError::CollectionNotFound)?;
+
+        let has_index = schema_version(&self.connection).map_err(semantic_storage_failure)?
+            >= INDEX_SCHEMA_VERSION;
+
+        let file_count: i64 = self
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM files WHERE collection_id = ?1",
+                params![collection_id],
+                |row| row.get(0),
+            )
+            .map_err(semantic_storage_failure)?;
+
+        let lexical_built = if has_index {
+            self.connection
+                .query_row(
+                    "SELECT 1 FROM lexical_index_state WHERE collection_id = ?1 LIMIT 1",
+                    params![collection_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()
+                .map_err(semantic_storage_failure)?
+                .is_some()
+        } else {
+            false
+        };
+
+        Ok(EmbedTarget::new(
+            collection.clone(),
+            file_count > 0,
+            lexical_built,
+        ))
+    }
+
+    fn global_model(&self) -> Result<Option<EmbeddingModel>, SemanticIndexStoreError> {
+        let model = self
+            .connection
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'embed_model' LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(semantic_storage_failure)?;
+
+        model
+            .map(|value| EmbeddingModel::try_new(&value).map_err(semantic_storage_failure))
+            .transpose()
+    }
+
+    fn set_global_model(&mut self, model: &EmbeddingModel) -> Result<(), SemanticIndexStoreError> {
+        self.connection
+            .execute(
+                "INSERT INTO settings(key, value) VALUES ('embed_model', ?1)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![model.as_str()],
+            )
+            .map_err(semantic_storage_failure)?;
+
+        Ok(())
+    }
+
+    fn reranker_model(&self) -> Result<Option<RerankerModel>, SemanticIndexStoreError> {
+        let model = self
+            .connection
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'reranker_model' LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(semantic_storage_failure)?;
+
+        model
+            .map(|value| RerankerModel::try_new(&value).map_err(semantic_storage_failure))
+            .transpose()
+    }
+
+    fn set_reranker_model(&mut self, model: &RerankerModel) -> Result<(), SemanticIndexStoreError> {
+        self.connection
+            .execute(
+                "INSERT INTO settings(key, value) VALUES ('reranker_model', ?1)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![model.as_str()],
+            )
+            .map_err(semantic_storage_failure)?;
+
+        Ok(())
+    }
+
+    fn status(
+        &self,
+        collection: &CollectionName,
+    ) -> Result<Option<SemanticIndexStatus>, SemanticIndexStoreError> {
+        let collection_id = self
+            .resolve_collection_id(collection)
+            .map_err(semantic_storage_failure)?
+            .ok_or(SemanticIndexStoreError::CollectionNotFound)?;
+
+        let row = self
+            .connection
+            .query_row(
+                "SELECT file_set_fingerprint, model, passage_count, embedded_at
+                 FROM semantic_index_state
+                 WHERE collection_id = ?1 LIMIT 1",
+                params![collection_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(semantic_storage_failure)?;
+
+        row.map(|(fingerprint, model, passage_count, embedded_at)| {
+            Ok(SemanticIndexStatus::new(
+                ContentHash::try_from_hex(&fingerprint).map_err(semantic_storage_failure)?,
+                EmbeddingModel::try_new(&model).map_err(semantic_storage_failure)?,
+                usize::try_from(passage_count).map_err(semantic_storage_failure)?,
+                Timestamp::from_unix_seconds(
+                    u64::try_from(embedded_at).map_err(semantic_storage_failure)?,
+                ),
+            ))
+        })
+        .transpose()
+    }
+
+    fn embedded_collections(&self) -> Result<Vec<CollectionName>, SemanticIndexStoreError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT c.display_name
+                 FROM semantic_index_state s
+                 JOIN collections c ON c.collection_id = s.collection_id
+                 ORDER BY c.name_key",
+            )
+            .map_err(semantic_storage_failure)?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(semantic_storage_failure)?;
+
+        let mut names = Vec::new();
+        for row in rows {
+            let display_name = row.map_err(semantic_storage_failure)?;
+            let collection = CollectionName::try_from(display_name.as_str())
+                .map_err(semantic_storage_failure)?;
+            names.push(collection);
+        }
+
+        Ok(names)
+    }
+
+    fn file_set_fingerprint(
+        &self,
+        collection: &CollectionName,
+    ) -> Result<ContentHash, SemanticIndexStoreError> {
+        let collection_id = self
+            .resolve_collection_id(collection)
+            .map_err(semantic_storage_failure)?
+            .ok_or(SemanticIndexStoreError::CollectionNotFound)?;
+
+        let mut statement = self
+            .connection
+            .prepare("SELECT path, content_hash FROM files WHERE collection_id = ?1 ORDER BY path")
+            .map_err(semantic_storage_failure)?;
+        let rows = statement
+            .query_map(params![collection_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(semantic_storage_failure)?;
+
+        let mut files = Vec::new();
+        for row in rows {
+            let (path, hash) = row.map_err(semantic_storage_failure)?;
+            let content_hash =
+                ContentHash::try_from_hex(&hash).map_err(semantic_storage_failure)?;
+            files.push((PathBuf::from(path), content_hash));
+        }
+        let paths = files
+            .iter()
+            .map(|(path, hash)| (path.as_path(), hash))
+            .collect::<Vec<_>>();
+
+        Ok(file_set_fingerprint(&paths))
+    }
+
+    fn passages(
+        &self,
+        collection: &CollectionName,
+    ) -> Result<Vec<SemanticPassage>, SemanticIndexStoreError> {
+        let collection_id = self
+            .resolve_collection_id(collection)
+            .map_err(semantic_storage_failure)?
+            .ok_or(SemanticIndexStoreError::CollectionNotFound)?;
+
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT pf.file_id, pf.kind, pf.position, passages.content
+                 FROM passages
+                 JOIN passage_files pf ON pf.passage_rowid = passages.rowid
+                 WHERE pf.collection_id = ?1
+                 ORDER BY pf.file_id, pf.position",
+            )
+            .map_err(semantic_storage_failure)?;
+        let rows = statement
+            .query_map(params![collection_id], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(semantic_storage_failure)?;
+
+        let mut passages = Vec::new();
+        for row in rows {
+            let (file_id, kind, position, text) = row.map_err(semantic_storage_failure)?;
+            let file_id = u64::try_from(file_id).map_err(semantic_storage_failure)?;
+            let file = FileId::try_new(file_id).map_err(semantic_storage_failure)?;
+            let kind = PassageKind::from_key(&kind).ok_or_else(|| {
+                SemanticIndexStoreError::Storage(Box::new(std::io::Error::other(
+                    "unknown passage kind",
+                )))
+            })?;
+            let position = usize::try_from(position).map_err(semantic_storage_failure)?;
+            passages.push(SemanticPassage::new(file, kind, position, text));
+        }
+
+        Ok(passages)
+    }
+
+    fn rebuild(
+        &mut self,
+        collection: &CollectionName,
+        model: &EmbeddingModel,
+        embedded_at: Timestamp,
+        embeddings: &[(SemanticPassage, Embedding)],
+    ) -> Result<usize, SemanticIndexStoreError> {
+        let embedded_at =
+            i64::try_from(embedded_at.as_unix_seconds()).map_err(semantic_storage_failure)?;
+        let fingerprint = self.file_set_fingerprint(collection)?;
+        let collection_id = self
+            .resolve_collection_id(collection)
+            .map_err(semantic_storage_failure)?
+            .ok_or(SemanticIndexStoreError::CollectionNotFound)?;
+
+        let transaction = self
+            .connection
+            .transaction()
+            .map_err(semantic_storage_failure)?;
+
+        transaction
+            .execute(
+                "DELETE FROM embeddings WHERE collection_id = ?1",
+                params![collection_id],
+            )
+            .map_err(semantic_storage_failure)?;
+
+        for (passage, embedding) in embeddings {
+            let values = embedding.as_slice();
+            if i64::try_from(values.len()).map_err(semantic_storage_failure)? != EMBEDDING_DIMENSION
+            {
+                return Err(SemanticIndexStoreError::Storage(Box::new(
+                    std::io::Error::other(format!(
+                        "embedding dimension mismatch: expected {EMBEDDING_DIMENSION}, got {}",
+                        values.len()
+                    )),
+                )));
+            }
+            let vector = vector_blob(values);
+            let file_id =
+                i64::try_from(passage.file().as_u64()).map_err(semantic_storage_failure)?;
+            let position = i64::try_from(passage.position()).map_err(semantic_storage_failure)?;
+            transaction
+                .execute(
+                    "INSERT INTO embeddings(vector, collection_id, file_id, kind, position)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        vector,
+                        collection_id,
+                        file_id,
+                        passage.kind().as_str(),
+                        position,
+                    ],
+                )
+                .map_err(semantic_storage_failure)?;
+        }
+
+        let passage_count = i64::try_from(embeddings.len()).map_err(semantic_storage_failure)?;
+        transaction
+            .execute(
+                "INSERT INTO semantic_index_state(
+                    collection_id, file_set_fingerprint, model, passage_count, embedded_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(collection_id) DO UPDATE SET
+                     file_set_fingerprint = excluded.file_set_fingerprint,
+                     model = excluded.model,
+                     passage_count = excluded.passage_count,
+                     embedded_at = excluded.embedded_at",
+                params![
+                    collection_id,
+                    fingerprint.as_str(),
+                    model.as_str(),
+                    passage_count,
+                    embedded_at,
+                ],
+            )
+            .map_err(semantic_storage_failure)?;
+
+        transaction.commit().map_err(semantic_storage_failure)?;
+
+        Ok(embeddings.len())
+    }
+}
+
+impl SqliteSemanticIndexStore {
+    fn resolve_collection_id(
+        &self,
+        collection: &CollectionName,
+    ) -> Result<Option<i64>, rusqlite::Error> {
+        self.connection
+            .query_row(
+                "SELECT collection_id FROM collections WHERE name_key = ?1 LIMIT 1",
+                params![collection.name_key()],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+    }
+}
+
+/// Encodes a vector into the sqlite-vector float4 blob format.
+pub(crate) fn vector_blob(values: &[f32]) -> Vec<u8> {
+    let mut blob = Vec::with_capacity(values.len() * 4);
+    for value in values {
+        blob.extend_from_slice(&value.to_le_bytes());
+    }
+    blob
+}
+
+fn semantic_storage_failure(error: impl Error + Send + Sync + 'static) -> SemanticIndexStoreError {
+    SemanticIndexStoreError::Storage(Box::new(error))
+}
+
 /// Retrieves stored files from an existing `SQLite` database.
 pub struct SqliteFileRetrievalStore {
     connection: Connection,
@@ -927,7 +1385,11 @@ fn search_query_failure(error: rusqlite::Error) -> SearchStoreError {
 ///
 /// When the offset is unknown (a database not yet migrated to schema version
 /// 4), the line range is reported as unknown (0) while the byte length is kept.
-fn compute_position(byte_offset: Option<i64>, byte_length: usize, content: &[u8]) -> Position {
+pub(crate) fn compute_position(
+    byte_offset: Option<i64>,
+    byte_length: usize,
+    content: &[u8],
+) -> Position {
     let Some(offset) = byte_offset.and_then(|value| usize::try_from(value).ok()) else {
         return Position::new(0, byte_length, 0, 0);
     };
