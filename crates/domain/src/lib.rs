@@ -7,7 +7,9 @@ mod collection;
 mod content_hash;
 mod embedding;
 mod file_id;
+mod fusion;
 mod passage;
+mod reranking;
 mod timestamp;
 
 pub use collection::{CollectionName, CollectionNameError};
@@ -17,5 +19,7 @@ pub use embedding::{
     file_set_fingerprint,
 };
 pub use file_id::{FileId, FileIdError};
+pub use fusion::{DEFAULT_RRF_K, FusedRank, PassageKey, free_text_to_fts5, reciprocal_rank_fusion};
 pub use passage::{FrontmatterIssue, Passage, PassageKind, segment_passages};
+pub use reranking::{RerankerModel, RerankerModelError};
 pub use timestamp::Timestamp;

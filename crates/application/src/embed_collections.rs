@@ -1,6 +1,11 @@
-use kv_domain::{CollectionName, Embedding, EmbeddingModel, SemanticPassage, Timestamp};
+use kv_domain::{
+    CollectionName, Embedding, EmbeddingModel, RerankerModel, SemanticPassage, Timestamp,
+};
 
-use crate::{Clock, EmbedError, EmbeddingGenerator, SemanticIndexStore, SemanticIndexStoreError};
+use crate::{
+    Clock, EmbedError, EmbeddingGenerator, RerankError, Reranker, SemanticIndexStore,
+    SemanticIndexStoreError,
+};
 
 /// The scope of an embed operation.
 #[derive(Clone, Copy, Debug)]
@@ -107,42 +112,52 @@ impl EmbedReport {
 const DEFAULT_MODEL: &str = "all-MiniLM-L6-v2";
 
 /// Orchestrates building the semantic index for collections.
-pub struct EmbedCollections<G, S, C> {
+pub struct EmbedCollections<G, S, C, R> {
     generator: G,
     store: S,
     clock: C,
+    reranker: R,
 }
 
-impl<G, S, C> EmbedCollections<G, S, C>
+impl<G, S, C, R> EmbedCollections<G, S, C, R>
 where
     G: EmbeddingGenerator,
     S: SemanticIndexStore,
     C: Clock,
+    R: Reranker,
 {
-    /// Creates an embed-collections use case with its generator, store, and
-    /// clock ports.
+    /// Creates an embed-collections use case with its generator, store, clock,
+    /// and re-ranker ports.
     #[must_use]
-    pub const fn new(generator: G, store: S, clock: C) -> Self {
+    pub const fn new(generator: G, store: S, clock: C, reranker: R) -> Self {
         Self {
             generator,
             store,
             clock,
+            reranker,
         }
     }
 
-    /// Builds the semantic index for the collections selected by `scope`.
+    /// Builds the semantic index for the collections selected by `scope` and
+    /// optionally provisions the re-ranker.
     ///
     /// # Errors
     ///
-    /// Returns an error when the model is unsupported or unavailable, when a
-    /// targeted collection does not exist or lacks a built lexical index, or
-    /// when the clock or store fails outside a per-collection rebuild.
+    /// Returns an error when the model or re-ranker is unsupported or
+    /// unavailable, when a targeted collection does not exist or lacks a built
+    /// lexical index, or when the clock or store fails outside a per-collection
+    /// rebuild.
     pub fn execute(
         &mut self,
         scope: EmbedScope<'_>,
         model: Option<&EmbeddingModel>,
+        reranker: Option<&RerankerModel>,
         download: bool,
     ) -> Result<EmbedReport, EmbedError> {
+        if let Some(reranker_model) = reranker {
+            self.provision_reranker(reranker_model, download)?;
+        }
+
         let recorded = self.store.global_model()?;
         let effective = match model.or(recorded.as_ref()) {
             Some(model) => model.clone(),
@@ -180,6 +195,38 @@ where
         }
 
         Ok(report)
+    }
+
+    fn provision_reranker(
+        &mut self,
+        reranker_model: &RerankerModel,
+        download: bool,
+    ) -> Result<(), EmbedError> {
+        match self.reranker.ensure_available(reranker_model, download) {
+            Ok(()) => {}
+            Err(RerankError::UnsupportedModel { model }) => {
+                return Err(EmbedError::Reranker(RerankError::UnsupportedModel {
+                    model,
+                }));
+            }
+            Err(RerankError::ModelNotCached { model }) => {
+                return Err(EmbedError::Reranker(RerankError::ModelNotCached { model }));
+            }
+            Err(RerankError::DownloadFailed { model, source }) => {
+                return Err(EmbedError::Reranker(RerankError::DownloadFailed {
+                    model,
+                    source,
+                }));
+            }
+            Err(RerankError::Storage(source)) => {
+                return Err(EmbedError::Reranker(RerankError::Storage(source)));
+            }
+        }
+        let recorded = self.store.reranker_model()?;
+        if recorded.as_ref() != Some(reranker_model) {
+            self.store.set_reranker_model(reranker_model)?;
+        }
+        Ok(())
     }
 
     fn resolve_targets(

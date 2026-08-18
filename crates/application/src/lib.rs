@@ -9,6 +9,7 @@ mod destroy_collection;
 mod embed_collections;
 mod error;
 mod get_file;
+mod hybrid_search;
 mod index_status;
 mod lexical_search;
 mod list_collections;
@@ -22,17 +23,19 @@ pub use embed_collections::{EmbedCollections, EmbedOutcome, EmbedReport, EmbedSc
 pub use error::{
     AddFilesError, ClockError, CollectionStoreError, CreateCollectionError, DestroyCollectionError,
     EmbedError, EmbeddingError, FileRetrievalStoreError, FileStoreError, FileSystemError,
-    GetFileError, IndexStatusError, IndexStoreError, ListCollectionsError, SearchError,
-    SearchStoreError, SemanticIndexStoreError, UpdateCollectionError,
+    GetFileError, HybridError, HybridSearchStoreError, IndexStatusError, IndexStoreError,
+    ListCollectionsError, RerankError, SearchError, SearchStoreError, SemanticIndexStoreError,
+    UpdateCollectionError,
 };
 pub use get_file::GetFile;
+pub use hybrid_search::{HybridResult, HybridResultSet, HybridSearch};
 pub use index_status::ReadIndexStatus;
 pub use lexical_search::SearchLexical;
 pub use list_collections::ListCollections;
 pub use ports::{
     Clock, CollectionStore, EmbedTarget, EmbeddingGenerator, FileRecord, FileRetrievalStore,
-    FileStore, FileSystem, IndexState, IndexStatus, LexicalIndexStore, LexicalSearchStore,
-    Position, ReconcileOutcome, RetrievedFile, SearchResult, SearchResultSet, SearchScope,
-    SemanticIndexStore, StoredFile,
+    FileStore, FileSystem, HybridCandidate, HybridCandidates, HybridSearchStore, IndexState,
+    IndexStatus, LexicalIndexStore, LexicalSearchStore, Position, ReconcileOutcome, Reranker,
+    RetrievedFile, SearchResult, SearchResultSet, SearchScope, SemanticIndexStore, StoredFile,
 };
 pub use update_collection::{UpdateCollection, UpdateOutcome, UpdateTarget};

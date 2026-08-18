@@ -5,15 +5,16 @@ use std::path::{Path, PathBuf};
 use clap::Parser;
 use kv_application::{
     AddFiles, CreateCollection, DestroyCollection, EmbedCollections, EmbedOutcome, EmbedReport,
-    EmbedScope, GetFile, IndexState, IndexStatus, ListCollections, ReadIndexStatus, SearchLexical,
-    SearchResultSet, SearchScope, SkipReason, UpdateCollection, UpdateOutcome, UpdateTarget,
+    EmbedScope, GetFile, HybridResultSet, HybridSearch, IndexState, IndexStatus, ListCollections,
+    ReadIndexStatus, SearchLexical, SearchResultSet, SearchScope, SkipReason, UpdateCollection,
+    UpdateOutcome, UpdateTarget,
 };
-use kv_domain::{CollectionName, EmbeddingModel};
-use kv_embed_fastembed::FastembedGenerator;
+use kv_domain::{CollectionName, EmbeddingModel, RerankerModel};
+use kv_embed_fastembed::{FastembedGenerator, FastembedReranker};
 use kv_infrastructure::{SystemClock, SystemFileSystem};
 use kv_store_sqlite::{
-    SqliteCollectionStore, SqliteFileRetrievalStore, SqliteFileStore, SqliteLexicalIndexStore,
-    SqliteLexicalSearchStore, SqliteSemanticIndexStore,
+    SqliteCollectionStore, SqliteFileRetrievalStore, SqliteFileStore, SqliteHybridSearchStore,
+    SqliteLexicalIndexStore, SqliteLexicalSearchStore, SqliteSemanticIndexStore,
 };
 
 use crate::AppError;
@@ -87,7 +88,17 @@ where
         Command::Embed(arguments) => embed(
             arguments.collection.as_deref(),
             arguments.model.as_deref(),
+            arguments.reranker.as_deref(),
             arguments.download,
+            arguments.database,
+            home_directory,
+        ),
+        Command::Hybrid(arguments) => hybrid(
+            &arguments.query,
+            arguments.collection.as_deref(),
+            arguments.limit,
+            arguments.json,
+            arguments.no_rerank,
             arguments.database,
             home_directory,
         ),
@@ -273,6 +284,48 @@ fn search(
     }
 }
 
+fn hybrid(
+    query: &str,
+    collection_name: Option<&str>,
+    limit: u16,
+    json: bool,
+    no_rerank: bool,
+    database_override: Option<PathBuf>,
+    home_directory: &Path,
+) -> Result<String, AppError> {
+    if query.trim().is_empty() {
+        return Err(AppError::Hybrid(kv_application::HybridError::EmptyQuery));
+    }
+
+    let database_path = database_override
+        .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
+    let generator = FastembedGenerator::new(None);
+    let reranker = FastembedReranker::new(None);
+    let store = SqliteHybridSearchStore::open(&database_path)?;
+    let use_case = HybridSearch::new(generator, store, reranker);
+
+    let collection = collection_name.map(CollectionName::try_from).transpose()?;
+    let scope = match collection.as_ref() {
+        Some(collection) => SearchScope::Collection(collection),
+        None => SearchScope::All,
+    };
+
+    let set = use_case.execute(query, usize::from(limit), scope, !no_rerank)?;
+
+    let scope_name = collection.as_ref().map_or_else(
+        || "all".to_owned(),
+        |collection| collection.display_name().to_owned(),
+    );
+
+    let rendered = if json {
+        render_hybrid_json(&set, query, &scope_name, limit)
+    } else {
+        render_hybrid_human(&set)
+    };
+
+    Ok(rendered)
+}
+
 fn get_file(
     raw_collection: &str,
     name_or_id: &str,
@@ -353,9 +406,83 @@ fn render_json(set: &SearchResultSet, query: &str, scope: &str, limit: u16) -> S
     .to_string()
 }
 
+fn render_hybrid_human(set: &HybridResultSet) -> String {
+    let mut lines = Vec::new();
+    for (index, result) in set.results().iter().enumerate() {
+        let position = result.position();
+        let header = if position.line_start() == 0 {
+            format!(
+                "{}. {} ({}, score {:.3})",
+                index + 1,
+                result.path().display(),
+                result.kind().as_str(),
+                result.ordering_score()
+            )
+        } else {
+            format!(
+                "{}. {}:{}-{} ({}, score {:.3})",
+                index + 1,
+                result.path().display(),
+                position.line_start(),
+                position.line_end(),
+                result.kind().as_str(),
+                result.ordering_score()
+            )
+        };
+        lines.push(header);
+        lines.push(result.text().to_owned());
+    }
+    if !set.results().is_empty() {
+        lines.push(format!("{} result(s)", set.results().len()));
+    }
+    if set.rerank_warning() {
+        lines.push("re-ranking skipped: re-ranker model is not cached; pass --no-rerank to suppress this warning".to_owned());
+    }
+    lines.join("\n")
+}
+
+fn render_hybrid_json(set: &HybridResultSet, query: &str, scope: &str, limit: u16) -> String {
+    let results: Vec<serde_json::Value> = set
+        .results()
+        .iter()
+        .map(|result| {
+            let position = result.position();
+            serde_json::json!({
+                "collection": result.collection().display_name(),
+                "path": result.path().to_string_lossy(),
+                "kind": result.kind().as_str(),
+                "text": result.text(),
+                "reranker_score": result.rerank_score(),
+                "fused_score": result.fused_score(),
+                "bm25_score": result.lexical_score(),
+                "cosine_similarity": result.semantic_score(),
+                "ordering_score": result.ordering_score(),
+                "position": {
+                    "byte_offset": position.byte_offset(),
+                    "byte_length": position.byte_length(),
+                    "line_start": position.line_start(),
+                    "line_end": position.line_end(),
+                },
+            })
+        })
+        .collect();
+
+    serde_json::json!({
+        "query": query,
+        "scope": scope,
+        "limit": limit,
+        "reranked": set.reranked(),
+        "rerank_warning": set.rerank_warning(),
+        "total": results.len(),
+        "results": results,
+    })
+    .to_string()
+}
+
 fn embed(
     collection_name: Option<&str>,
     model_name: Option<&str>,
+    reranker_name: Option<&str>,
     download: bool,
     database_override: Option<PathBuf>,
     home_directory: &Path,
@@ -363,17 +490,19 @@ fn embed(
     let database_path = database_override
         .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
     let generator = FastembedGenerator::new(None);
+    let reranker = FastembedReranker::new(None);
     let store = SqliteSemanticIndexStore::open_for_embedding(&database_path)?;
-    let mut use_case = EmbedCollections::new(generator, store, SystemClock);
+    let mut use_case = EmbedCollections::new(generator, store, SystemClock, reranker);
 
     let model = model_name.map(EmbeddingModel::try_from).transpose()?;
+    let reranker = reranker_name.map(RerankerModel::try_from).transpose()?;
     let collection = collection_name.map(CollectionName::try_from).transpose()?;
     let scope = match collection.as_ref() {
         Some(collection) => EmbedScope::Collection(collection),
         None => EmbedScope::All,
     };
 
-    let report = use_case.execute(scope, model.as_ref(), download)?;
+    let report = use_case.execute(scope, model.as_ref(), reranker.as_ref(), download)?;
 
     let rendered = render_embed_report(&report);
     if report.any_failed() {

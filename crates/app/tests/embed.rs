@@ -115,3 +115,87 @@ fn embed_uncached_model_suggests_download() -> Result<(), Box<dyn Error>> {
 
     Ok(())
 }
+
+/// Covers: REQ-021 — an unsupported reranker fails before any collection work.
+#[test]
+fn embed_unsupported_reranker_fails() -> Result<(), Box<dyn Error>> {
+    let home = tempdir()?;
+    let vault = home.path().join("vault");
+    fs::create_dir_all(&vault)?;
+    fs::write(vault.join("a.md"), "borrowing rules")?;
+
+    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "add",
+            "Notes",
+            path_argument(&vault)?,
+        ],
+        home.path(),
+    )?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "update",
+            "Notes",
+            path_argument(&vault)?,
+        ],
+        home.path(),
+    )?;
+
+    let error = run(
+        ["mdsearch", "embed", "--reranker", "bogus-reranker"],
+        home.path(),
+    )
+    .err()
+    .ok_or_else(|| std::io::Error::other("an unsupported reranker should fail"))?;
+
+    assert!(error.to_string().contains("bogus-reranker"));
+
+    Ok(())
+}
+
+/// Covers: REQ-021 — an uncached reranker suggests download.
+#[test]
+fn embed_uncached_reranker_suggests_download() -> Result<(), Box<dyn Error>> {
+    let home = tempdir()?;
+    let vault = home.path().join("vault");
+    fs::create_dir_all(&vault)?;
+    fs::write(vault.join("a.md"), "borrowing rules")?;
+
+    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "add",
+            "Notes",
+            path_argument(&vault)?,
+        ],
+        home.path(),
+    )?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "update",
+            "Notes",
+            path_argument(&vault)?,
+        ],
+        home.path(),
+    )?;
+
+    let error = run(
+        ["mdsearch", "embed", "--reranker", "bge-reranker-base"],
+        home.path(),
+    )
+    .err()
+    .ok_or_else(|| std::io::Error::other("an uncached reranker should fail"))?;
+
+    assert!(error.to_string().contains("--download"));
+
+    Ok(())
+}

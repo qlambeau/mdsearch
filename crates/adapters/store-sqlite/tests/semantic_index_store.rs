@@ -101,6 +101,30 @@ fn global_model_starts_unset_and_is_recorded() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Covers: REQ-011 FR-017 — the re-ranker model setting round-trips.
+#[test]
+fn reranker_model_setting_round_trips() -> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let notes = name("Notes")?;
+    build(directory.path(), &notes, &[("a.md", "body")])?;
+    let mut store =
+        SqliteSemanticIndexStore::open_for_embedding(&directory.path().join("collections.db"))?;
+
+    assert!(store.reranker_model()?.is_none());
+
+    let reranker = kv_domain::RerankerModel::try_new("bge-reranker-base")?;
+    store.set_reranker_model(&reranker)?;
+
+    assert_eq!(
+        store
+            .reranker_model()?
+            .map(|value| value.as_str().to_owned()),
+        Some("bge-reranker-base".to_owned())
+    );
+
+    Ok(())
+}
+
 /// Covers: REQ-001 — a fresh collection has no semantic status and embeds.
 #[test]
 fn fresh_collection_has_no_status_and_embeds() -> Result<(), Box<dyn Error>> {

@@ -1,6 +1,6 @@
 use kv_domain::{
-    CollectionName, ContentHash, Embedding, EmbeddingModel, SemanticIndexStatus, SemanticPassage,
-    Timestamp,
+    CollectionName, ContentHash, Embedding, EmbeddingModel, RerankerModel, SemanticIndexStatus,
+    SemanticPassage, Timestamp,
 };
 
 use crate::SemanticIndexStoreError;
@@ -73,6 +73,20 @@ pub trait SemanticIndexStore {
     ///
     /// Returns a storage error when the setting cannot be written.
     fn set_global_model(&mut self, model: &EmbeddingModel) -> Result<(), SemanticIndexStoreError>;
+
+    /// Returns the recorded global re-ranker model, if any.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when the setting cannot be read.
+    fn reranker_model(&self) -> Result<Option<RerankerModel>, SemanticIndexStoreError>;
+
+    /// Records the global re-ranker model.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when the setting cannot be written.
+    fn set_reranker_model(&mut self, model: &RerankerModel) -> Result<(), SemanticIndexStoreError>;
 
     /// Returns the semantic index status of one collection, if embedded.
     ///

@@ -3,6 +3,8 @@
 
 //! `SQLite` adapter for the `mdsearch` application ports.
 
+mod hybrid;
+
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -16,13 +18,16 @@ use kv_application::{
 };
 use kv_domain::{
     CollectionName, ContentHash, Embedding, EmbeddingModel, FileId, FrontmatterIssue, PassageKind,
-    SemanticIndexStatus, SemanticPassage, Timestamp, file_set_fingerprint, segment_passages,
+    RerankerModel, SemanticIndexStatus, SemanticPassage, Timestamp, file_set_fingerprint,
+    segment_passages,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use sqlite_vector_rs::scalar;
 use sqlite_vector_rs::vtab::{Registry, VectorTable};
 use sqlite3_ext::Connection as ExtensionConnection;
 use sqlite3_ext::vtab::{Module, StandardModule};
+
+pub use hybrid::SqliteHybridSearchStore;
 
 /// The current database schema version applied by [`migrate`].
 const CURRENT_SCHEMA_VERSION: i64 = 5;
@@ -104,7 +109,7 @@ impl SqliteFileStore {
     }
 }
 
-fn register_vector_extension(connection: &Connection) -> Result<(), sqlite3_ext::Error> {
+pub(crate) fn register_vector_extension(connection: &Connection) -> Result<(), sqlite3_ext::Error> {
     let extension_connection = ExtensionConnection::from_rusqlite(connection);
     let module = StandardModule::<VectorTable<'_>>::new()
         .with_update()
@@ -885,6 +890,34 @@ impl SemanticIndexStore for SqliteSemanticIndexStore {
         Ok(())
     }
 
+    fn reranker_model(&self) -> Result<Option<RerankerModel>, SemanticIndexStoreError> {
+        let model = self
+            .connection
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'reranker_model' LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(semantic_storage_failure)?;
+
+        model
+            .map(|value| RerankerModel::try_new(&value).map_err(semantic_storage_failure))
+            .transpose()
+    }
+
+    fn set_reranker_model(&mut self, model: &RerankerModel) -> Result<(), SemanticIndexStoreError> {
+        self.connection
+            .execute(
+                "INSERT INTO settings(key, value) VALUES ('reranker_model', ?1)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![model.as_str()],
+            )
+            .map_err(semantic_storage_failure)?;
+
+        Ok(())
+    }
+
     fn status(
         &self,
         collection: &CollectionName,
@@ -1132,7 +1165,7 @@ impl SqliteSemanticIndexStore {
 }
 
 /// Encodes a vector into the sqlite-vector float4 blob format.
-fn vector_blob(values: &[f32]) -> Vec<u8> {
+pub(crate) fn vector_blob(values: &[f32]) -> Vec<u8> {
     let mut blob = Vec::with_capacity(values.len() * 4);
     for value in values {
         blob.extend_from_slice(&value.to_le_bytes());
@@ -1352,7 +1385,11 @@ fn search_query_failure(error: rusqlite::Error) -> SearchStoreError {
 ///
 /// When the offset is unknown (a database not yet migrated to schema version
 /// 4), the line range is reported as unknown (0) while the byte length is kept.
-fn compute_position(byte_offset: Option<i64>, byte_length: usize, content: &[u8]) -> Position {
+pub(crate) fn compute_position(
+    byte_offset: Option<i64>,
+    byte_length: usize,
+    content: &[u8],
+) -> Position {
     let Some(offset) = byte_offset.and_then(|value| usize::try_from(value).ok()) else {
         return Position::new(0, byte_length, 0, 0);
     };

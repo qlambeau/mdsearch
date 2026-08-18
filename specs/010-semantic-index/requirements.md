@@ -13,10 +13,13 @@ related:
   - DES-006
   - DES-007
   - DES-010
+  - US-011
+  - REQ-011
   - ADR-001
   - ADR-003
   - ADR-004
   - ADR-006
+  - ADR-007
   - DB-001
   - TABLE-004
   - TABLE-005
@@ -50,7 +53,7 @@ embedding model, and reports per-collection status.
 ## Preconditions
 
 - The user invokes `mdsearch embed`, with optional `--collection NAME`,
-  `--model NAME`, `--download`, and `--database PATH`.
+  `--model NAME`, `--reranker NAME`, `--download`, and `--database PATH`.
 - The database path is `~/.mdsearch/collections.db` unless `--database PATH` is
   supplied.
 - The database exists and contains the collections to be embedded.
@@ -60,9 +63,10 @@ embedding model, and reports per-collection status.
 
 | Interaction | Inputs | Outputs | Validation |
 | --- | --- | --- | --- |
-| Embed all collections | Optional `--model NAME`, optional `--download`, optional `--database PATH` | Per-collection summary lines (embedded passage count, already current, skipped, or failed) plus the model used | The selected model is supported and cached (or `--download` is passed) before any collection work |
-| Embed one collection | `--collection NAME`, optional `--model NAME`, optional `--download`, optional `--database PATH` | Same per-collection summary restricted to the named collection | `NAME` matched case-insensitively; the collection exists; its lexical index is built |
+| Embed all collections | Optional `--model NAME`, optional `--reranker NAME`, optional `--download`, optional `--database PATH` | Per-collection summary lines (embedded passage count, already current, skipped, or failed) plus the model used | The selected model is supported and cached (or `--download` is passed) before any collection work |
+| Embed one collection | `--collection NAME`, optional `--model NAME`, optional `--reranker NAME`, optional `--download`, optional `--database PATH` | Same per-collection summary restricted to the named collection | `NAME` matched case-insensitively; the collection exists; its lexical index is built |
 | Download model assets | `--download` | Model assets fetched to the local cache, then embed proceeds | The fetch succeeds; on failure nothing is modified |
+| Provision the re-ranker | `--reranker NAME`, optional `--download` | Re-ranker assets checked or fetched into the local cache and a global re-ranker model recorded | The re-ranker name is supported and its assets are cached (or `--download` is passed) |
 
 ## Functional Requirements
 
@@ -86,6 +90,9 @@ embedding model, and reports per-collection status.
 | FR-016 | The command's output shall be a per-collection summary reporting, for each collection: embedded passage count, already current, skipped (no files or unbuilt lexical index), or failed, plus the model used. | Must | US-010; Embed builds the semantic index from the lexical passages |
 | FR-017 | `mdsearch embed` against a missing database shall fail semantically without creating a database file. | Must | US-010; Report a missing database without creating a file |
 | FR-018 | `--database PATH` shall select the database used by `mdsearch embed`. | Must | US-010; Report a missing database without creating a file |
+| FR-019 | With `--reranker NAME`, `embed` shall validate the re-ranker name, ensure its assets are cached locally (fetching them when `--download` is passed), and record a single global re-ranker model in the database. | Must | US-011; Re-ranker provisioning via embed (FR-017 of REQ-011) |
+| FR-020 | The re-ranker provisioning shall not store vectors or modify any collection's semantic index; it only records the `reranker_model` setting. | Must | US-011; Re-ranker provisioning via embed (FR-017 of REQ-011) |
+| FR-021 | An unsupported or uncached `--reranker` value shall fail clearly before any collection work, mirroring the embedding model's validation and download gating. | Must | US-011; Re-ranker provisioning via embed (FR-017 of REQ-011) |
 
 ## Postconditions And Invariants
 
@@ -98,7 +105,8 @@ embedding model, and reports per-collection status.
   vectors from a superseded model.
 - The command operates offline unless `--download` is explicitly passed.
 - The operation does not modify the lexical index, the stored files, or the
-  collections.
+  collections. With `--reranker`, it additionally records a single global
+  re-ranker model and stores no vectors for the re-ranker.
 
 ## Edge And Failure Behavior
 
@@ -116,6 +124,9 @@ embedding model, and reports per-collection status.
 | Files changed since the last embed | Rebuild the affected collection | Current passage set embedded |
 | No files and no model changed | Do not rebuild | Collection reported as already current |
 | A `--model` value differs from the recorded global model | Switch the global model and rebuild every embedded collection | All previously embedded collections show the new model |
+| `--reranker` names an unsupported model | Fail before any collection work | Clear error naming the model |
+| `--reranker` model assets not cached locally, no `--download` | Fail before any collection work | Clear error naming the model and suggesting `--download` |
+| `--download` re-ranker fetch failure | Fail cleanly; no collection modified, no setting recorded | Clear fetch-failure error |
 | The database does not exist | Fail without creating a file | Output communicates the database does not exist |
 
 ## Quality Requirements

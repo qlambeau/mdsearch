@@ -18,6 +18,7 @@ pub(crate) enum Command {
     Search(SearchArgs),
     Get(GetArgs),
     Embed(EmbedArgs),
+    Hybrid(HybridArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -71,8 +72,27 @@ pub(crate) struct EmbedArgs {
     pub(crate) collection: Option<String>,
     #[arg(long, value_name = "NAME")]
     pub(crate) model: Option<String>,
+    #[arg(long, value_name = "NAME")]
+    pub(crate) reranker: Option<String>,
     #[arg(long)]
     pub(crate) download: bool,
+    #[arg(long, value_name = "PATH")]
+    pub(crate) database: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct HybridArgs {
+    #[arg(value_name = "QUERY")]
+    pub(crate) query: String,
+    #[arg(long, value_name = "NAME")]
+    pub(crate) collection: Option<String>,
+    #[arg(long, value_name = "N", default_value_t = 10)]
+    #[arg(value_parser = clap::value_parser!(u16).range(1..=100))]
+    pub(crate) limit: u16,
+    #[arg(long)]
+    pub(crate) json: bool,
+    #[arg(long)]
+    pub(crate) no_rerank: bool,
     #[arg(long, value_name = "PATH")]
     pub(crate) database: Option<PathBuf>,
 }

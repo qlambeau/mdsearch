@@ -3,14 +3,16 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::error::Error;
+use std::rc::Rc;
 
 use kv_application::{
     ClockError, EmbedCollections, EmbedOutcome, EmbedReport, EmbedScope, EmbeddingError,
-    EmbeddingGenerator, SemanticIndexStore, SemanticIndexStoreError, SkipReason,
+    EmbeddingGenerator, RerankError, Reranker, SemanticIndexStore, SemanticIndexStoreError,
+    SkipReason,
 };
 use kv_domain::{
-    CollectionName, ContentHash, Embedding, EmbeddingModel, FileId, SemanticIndexStatus,
-    SemanticPassage, Timestamp,
+    CollectionName, ContentHash, Embedding, EmbeddingModel, FileId, RerankerModel,
+    SemanticIndexStatus, SemanticPassage, Timestamp,
 };
 
 #[derive(Default)]
@@ -82,9 +84,42 @@ impl EmbeddingGenerator for FakeGenerator {
 }
 
 #[derive(Default)]
+struct FakeReranker {
+    supported: Vec<String>,
+    cached: bool,
+    download_allowed: bool,
+}
+
+impl Reranker for FakeReranker {
+    fn ensure_available(&self, model: &RerankerModel, download: bool) -> Result<(), RerankError> {
+        if !self.supported.iter().any(|name| name == model.as_str()) {
+            return Err(RerankError::UnsupportedModel {
+                model: model.as_str().to_owned(),
+            });
+        }
+        if self.cached || (download && self.download_allowed) {
+            Ok(())
+        } else {
+            Err(RerankError::ModelNotCached {
+                model: model.as_str().to_owned(),
+            })
+        }
+    }
+
+    fn rerank(
+        &self,
+        _model: &RerankerModel,
+        _query: &str,
+        documents: &[&str],
+    ) -> Result<Vec<f64>, RerankError> {
+        Ok(documents.iter().map(|_| 0.0).collect())
+    }
+}
+
 struct FakeStore {
     targets: Vec<(String, bool, bool)>,
     global: Option<String>,
+    reranker: Option<String>,
     statuses: HashMap<String, Option<(String, String, usize, u64)>>,
     fingerprints: HashMap<String, String>,
     passages: HashMap<String, Vec<(u64, String, usize, String)>>,
@@ -93,6 +128,26 @@ struct FakeStore {
     fail_store: bool,
     fail_rebuild: bool,
     recorded_model: RefCell<Option<String>>,
+    recorded_reranker: Rc<RefCell<Option<String>>>,
+}
+
+impl Default for FakeStore {
+    fn default() -> Self {
+        Self {
+            targets: Vec::new(),
+            global: None,
+            reranker: None,
+            statuses: HashMap::new(),
+            fingerprints: HashMap::new(),
+            passages: HashMap::new(),
+            embedded: Vec::new(),
+            rebuilds: RefCell::new(Vec::new()),
+            fail_store: false,
+            fail_rebuild: false,
+            recorded_model: RefCell::new(None),
+            recorded_reranker: Rc::new(RefCell::new(None)),
+        }
+    }
 }
 
 impl FakeStore {
@@ -151,6 +206,24 @@ impl SemanticIndexStore for FakeStore {
             )));
         }
         *self.recorded_model.borrow_mut() = Some(model.as_str().to_owned());
+        Ok(())
+    }
+
+    fn reranker_model(&self) -> Result<Option<RerankerModel>, SemanticIndexStoreError> {
+        self.reranker
+            .as_deref()
+            .map(RerankerModel::try_new)
+            .transpose()
+            .map_err(|error| SemanticIndexStoreError::Storage(Box::new(error)))
+    }
+
+    fn set_reranker_model(&mut self, model: &RerankerModel) -> Result<(), SemanticIndexStoreError> {
+        if self.fail_store {
+            return Err(SemanticIndexStoreError::Storage(Box::new(
+                std::io::Error::other("store failed"),
+            )));
+        }
+        *self.recorded_reranker.borrow_mut() = Some(model.as_str().to_owned());
         Ok(())
     }
 
@@ -287,9 +360,14 @@ fn embeds_every_eligible_collection() -> Result<(), Box<dyn Error>> {
         supported: supported("all-MiniLM-L6-v2"),
         ..FakeGenerator::default()
     };
-    let mut use_case = EmbedCollections::new(generator, store, FakeClock { now: 1 });
+    let mut use_case = EmbedCollections::new(
+        generator,
+        store,
+        FakeClock { now: 1 },
+        FakeReranker::default(),
+    );
 
-    let report = use_case.execute(EmbedScope::All, None, false)?;
+    let report = use_case.execute(EmbedScope::All, None, None, false)?;
 
     assert_eq!(report.outcomes().len(), 1);
     assert!(!report.any_failed());
@@ -322,9 +400,14 @@ fn reports_an_unchanged_collection_as_already_current() -> Result<(), Box<dyn Er
         supported: supported("all-MiniLM-L6-v2"),
         ..FakeGenerator::default()
     };
-    let mut use_case = EmbedCollections::new(generator, store, FakeClock { now: 2 });
+    let mut use_case = EmbedCollections::new(
+        generator,
+        store,
+        FakeClock { now: 2 },
+        FakeReranker::default(),
+    );
 
-    let report = use_case.execute(EmbedScope::All, None, false)?;
+    let report = use_case.execute(EmbedScope::All, None, None, false)?;
 
     assert!(matches!(
         report.outcomes().first(),
@@ -357,9 +440,14 @@ fn rebuilds_when_the_file_set_changed() -> Result<(), Box<dyn Error>> {
         supported: supported("all-MiniLM-L6-v2"),
         ..FakeGenerator::default()
     };
-    let mut use_case = EmbedCollections::new(generator, store, FakeClock { now: 2 });
+    let mut use_case = EmbedCollections::new(
+        generator,
+        store,
+        FakeClock { now: 2 },
+        FakeReranker::default(),
+    );
 
-    let report = use_case.execute(EmbedScope::All, None, false)?;
+    let report = use_case.execute(EmbedScope::All, None, None, false)?;
 
     assert!(matches!(
         report.outcomes().first(),
@@ -395,10 +483,15 @@ fn model_switch_rebuilds_every_embedded_collection() -> Result<(), Box<dyn Error
         supported: vec!["alpha".to_owned(), "beta".to_owned()],
         ..FakeGenerator::default()
     };
-    let mut use_case = EmbedCollections::new(generator, store, FakeClock { now: 2 });
+    let mut use_case = EmbedCollections::new(
+        generator,
+        store,
+        FakeClock { now: 2 },
+        FakeReranker::default(),
+    );
     let beta = model("beta")?;
 
-    let report = use_case.execute(EmbedScope::All, Some(&beta), false)?;
+    let report = use_case.execute(EmbedScope::All, Some(&beta), None, false)?;
 
     let names = report
         .outcomes()
@@ -436,11 +529,16 @@ fn model_switch_rebuilds_embedded_collections_even_under_a_narrow_scope()
         supported: vec!["alpha".to_owned(), "beta".to_owned()],
         ..FakeGenerator::default()
     };
-    let mut use_case = EmbedCollections::new(generator, store, FakeClock { now: 2 });
+    let mut use_case = EmbedCollections::new(
+        generator,
+        store,
+        FakeClock { now: 2 },
+        FakeReranker::default(),
+    );
     let beta = model("beta")?;
     let notes = collection("Notes")?;
 
-    let report = use_case.execute(EmbedScope::Collection(&notes), Some(&beta), false)?;
+    let report = use_case.execute(EmbedScope::Collection(&notes), Some(&beta), None, false)?;
 
     let names = report
         .outcomes()
@@ -462,12 +560,17 @@ fn unsupported_model_fails_before_any_collection_work() -> Result<(), Box<dyn Er
         supported: Vec::new(),
         ..FakeGenerator::default()
     };
-    let mut use_case = EmbedCollections::new(generator, store, FakeClock::default());
+    let mut use_case = EmbedCollections::new(
+        generator,
+        store,
+        FakeClock::default(),
+        FakeReranker::default(),
+    );
     let bogus = model("bogus")?;
 
     assert!(
         use_case
-            .execute(EmbedScope::All, Some(&bogus), false)
+            .execute(EmbedScope::All, Some(&bogus), None, false)
             .is_err()
     );
 
@@ -484,9 +587,18 @@ fn missing_local_model_fails_before_any_collection_work() {
         supported: supported("all-MiniLM-L6-v2"),
         ..FakeGenerator::default()
     };
-    let mut use_case = EmbedCollections::new(generator, store, FakeClock::default());
+    let mut use_case = EmbedCollections::new(
+        generator,
+        store,
+        FakeClock::default(),
+        FakeReranker::default(),
+    );
 
-    assert!(use_case.execute(EmbedScope::All, None, false).is_err());
+    assert!(
+        use_case
+            .execute(EmbedScope::All, None, None, false)
+            .is_err()
+    );
 }
 
 /// Covers: FR-010 — --download allows an uncached model to proceed.
@@ -507,9 +619,14 @@ fn download_allows_an_uncached_model() -> Result<(), Box<dyn Error>> {
         supported: supported("all-MiniLM-L6-v2"),
         ..FakeGenerator::default()
     };
-    let mut use_case = EmbedCollections::new(generator, store, FakeClock { now: 1 });
+    let mut use_case = EmbedCollections::new(
+        generator,
+        store,
+        FakeClock { now: 1 },
+        FakeReranker::default(),
+    );
 
-    let report = use_case.execute(EmbedScope::All, None, true)?;
+    let report = use_case.execute(EmbedScope::All, None, None, true)?;
 
     assert!(!report.any_failed());
     assert!(matches!(
@@ -530,9 +647,14 @@ fn skips_a_collection_without_a_built_lexical_index() -> Result<(), Box<dyn Erro
         supported: supported("all-MiniLM-L6-v2"),
         ..FakeGenerator::default()
     };
-    let mut use_case = EmbedCollections::new(generator, store, FakeClock { now: 1 });
+    let mut use_case = EmbedCollections::new(
+        generator,
+        store,
+        FakeClock { now: 1 },
+        FakeReranker::default(),
+    );
 
-    let report = use_case.execute(EmbedScope::All, None, false)?;
+    let report = use_case.execute(EmbedScope::All, None, None, false)?;
 
     assert!(matches!(
         report.outcomes().first(),
@@ -555,11 +677,16 @@ fn unbuilt_lexical_index_fails_when_explicitly_targeted() -> Result<(), Box<dyn 
         supported: supported("all-MiniLM-L6-v2"),
         ..FakeGenerator::default()
     };
-    let mut use_case = EmbedCollections::new(generator, store, FakeClock { now: 1 });
+    let mut use_case = EmbedCollections::new(
+        generator,
+        store,
+        FakeClock { now: 1 },
+        FakeReranker::default(),
+    );
     let archive = collection("Archive")?;
 
     assert!(matches!(
-        use_case.execute(EmbedScope::Collection(&archive), None, false),
+        use_case.execute(EmbedScope::Collection(&archive), None, None, false),
         Err(kv_application::EmbedError::IndexNotBuilt)
     ));
 
@@ -576,9 +703,14 @@ fn skips_a_collection_with_no_files() -> Result<(), Box<dyn Error>> {
         supported: supported("all-MiniLM-L6-v2"),
         ..FakeGenerator::default()
     };
-    let mut use_case = EmbedCollections::new(generator, store, FakeClock { now: 1 });
+    let mut use_case = EmbedCollections::new(
+        generator,
+        store,
+        FakeClock { now: 1 },
+        FakeReranker::default(),
+    );
 
-    let report = use_case.execute(EmbedScope::All, None, false)?;
+    let report = use_case.execute(EmbedScope::All, None, None, false)?;
 
     assert!(matches!(
         report.outcomes().first(),
@@ -601,10 +733,15 @@ fn skips_a_no_files_collection_even_when_targeted() -> Result<(), Box<dyn Error>
         supported: supported("all-MiniLM-L6-v2"),
         ..FakeGenerator::default()
     };
-    let mut use_case = EmbedCollections::new(generator, store, FakeClock { now: 1 });
+    let mut use_case = EmbedCollections::new(
+        generator,
+        store,
+        FakeClock { now: 1 },
+        FakeReranker::default(),
+    );
     let empty = collection("Empty")?;
 
-    let report = use_case.execute(EmbedScope::Collection(&empty), None, false)?;
+    let report = use_case.execute(EmbedScope::Collection(&empty), None, None, false)?;
 
     assert!(matches!(
         report.outcomes().first(),
@@ -626,11 +763,16 @@ fn unknown_collection_fails_when_explicitly_targeted() -> Result<(), Box<dyn Err
         supported: supported("all-MiniLM-L6-v2"),
         ..FakeGenerator::default()
     };
-    let mut use_case = EmbedCollections::new(generator, store, FakeClock { now: 1 });
+    let mut use_case = EmbedCollections::new(
+        generator,
+        store,
+        FakeClock { now: 1 },
+        FakeReranker::default(),
+    );
     let journal = collection("Journal")?;
 
     assert!(matches!(
-        use_case.execute(EmbedScope::Collection(&journal), None, false),
+        use_case.execute(EmbedScope::Collection(&journal), None, None, false),
         Err(kv_application::EmbedError::CollectionNotFound)
     ));
 
@@ -663,9 +805,14 @@ fn per_collection_failure_is_reported_and_processing_continues() -> Result<(), B
         fail_embed: true,
         ..FakeGenerator::default()
     };
-    let mut use_case = EmbedCollections::new(generator, store, FakeClock { now: 1 });
+    let mut use_case = EmbedCollections::new(
+        generator,
+        store,
+        FakeClock { now: 1 },
+        FakeReranker::default(),
+    );
 
-    let report = use_case.execute(EmbedScope::All, None, false)?;
+    let report = use_case.execute(EmbedScope::All, None, None, false)?;
 
     assert_eq!(report.outcomes().len(), 2);
     assert!(report.any_failed());
@@ -699,9 +846,14 @@ fn failed_rebuild_reports_a_failure() -> Result<(), Box<dyn Error>> {
         supported: supported("all-MiniLM-L6-v2"),
         ..FakeGenerator::default()
     };
-    let mut use_case = EmbedCollections::new(generator, store, FakeClock { now: 1 });
+    let mut use_case = EmbedCollections::new(
+        generator,
+        store,
+        FakeClock { now: 1 },
+        FakeReranker::default(),
+    );
 
-    let report = use_case.execute(EmbedScope::All, None, false)?;
+    let report = use_case.execute(EmbedScope::All, None, None, false)?;
 
     assert!(report.any_failed());
     assert!(matches!(
@@ -722,11 +874,125 @@ fn empty_report_when_no_collections_are_eligible() -> Result<(), Box<dyn Error>>
         supported: supported("all-MiniLM-L6-v2"),
         ..FakeGenerator::default()
     };
-    let mut use_case = EmbedCollections::new(generator, store, FakeClock { now: 1 });
+    let mut use_case = EmbedCollections::new(
+        generator,
+        store,
+        FakeClock { now: 1 },
+        FakeReranker::default(),
+    );
 
-    let report = use_case.execute(EmbedScope::All, None, false)?;
+    let report = use_case.execute(EmbedScope::All, None, None, false)?;
 
     assert!(report.outcomes().is_empty());
+
+    Ok(())
+}
+
+/// Covers: REQ-011 FR-017 — a reranker is provisioned and recorded.
+#[test]
+fn provisions_and_records_a_reranker() -> Result<(), Box<dyn Error>> {
+    let mut store = FakeStore {
+        global: Some("all-MiniLM-L6-v2".to_owned()),
+        ..FakeStore::default()
+    };
+    store
+        .fingerprints
+        .insert("Notes".to_owned(), fingerprint("files"));
+    let recorded = store.recorded_reranker.clone();
+    let generator = FakeGenerator {
+        available: true,
+        supported: supported("all-MiniLM-L6-v2"),
+        ..FakeGenerator::default()
+    };
+    let reranker = FakeReranker {
+        supported: supported("bge-reranker-base"),
+        cached: true,
+        ..FakeReranker::default()
+    };
+    let mut use_case = EmbedCollections::new(generator, store, FakeClock { now: 1 }, reranker);
+    let reranker_name = RerankerModel::try_new("bge-reranker-base")?;
+
+    use_case.execute(EmbedScope::All, None, Some(&reranker_name), false)?;
+
+    assert_eq!(*recorded.borrow(), Some("bge-reranker-base".to_owned()));
+
+    Ok(())
+}
+
+/// Covers: REQ-011 FR-021 — an unsupported reranker fails before collection work.
+#[test]
+fn an_unsupported_reranker_fails() -> Result<(), Box<dyn Error>> {
+    let store = FakeStore::default();
+    let generator = FakeGenerator {
+        supported: supported("all-MiniLM-L6-v2"),
+        ..FakeGenerator::default()
+    };
+    let reranker = FakeReranker {
+        supported: Vec::new(),
+        ..FakeReranker::default()
+    };
+    let mut use_case = EmbedCollections::new(generator, store, FakeClock::default(), reranker);
+    let bogus = RerankerModel::try_new("bogus")?;
+
+    assert!(matches!(
+        use_case.execute(EmbedScope::All, None, Some(&bogus), false),
+        Err(kv_application::EmbedError::Reranker(
+            RerankError::UnsupportedModel { .. }
+        ))
+    ));
+
+    Ok(())
+}
+
+/// Covers: REQ-011 FR-021 — an uncached reranker fails without download.
+#[test]
+fn an_uncached_reranker_fails_without_download() -> Result<(), Box<dyn Error>> {
+    let store = FakeStore::default();
+    let generator = FakeGenerator::default();
+    let reranker = FakeReranker {
+        supported: supported("bge-reranker-base"),
+        cached: false,
+        download_allowed: false,
+    };
+    let mut use_case = EmbedCollections::new(generator, store, FakeClock::default(), reranker);
+    let name = RerankerModel::try_new("bge-reranker-base")?;
+
+    assert!(matches!(
+        use_case.execute(EmbedScope::All, None, Some(&name), false),
+        Err(kv_application::EmbedError::Reranker(
+            RerankError::ModelNotCached { .. }
+        ))
+    ));
+
+    Ok(())
+}
+
+/// Covers: REQ-011 FR-020 — --download allows an uncached reranker to proceed.
+#[test]
+fn download_allows_an_uncached_reranker() -> Result<(), Box<dyn Error>> {
+    let mut store = FakeStore {
+        global: Some("all-MiniLM-L6-v2".to_owned()),
+        ..FakeStore::default()
+    };
+    store
+        .fingerprints
+        .insert("Notes".to_owned(), fingerprint("files"));
+    let generator = FakeGenerator {
+        available: true,
+        supported: supported("all-MiniLM-L6-v2"),
+        ..FakeGenerator::default()
+    };
+    let reranker = FakeReranker {
+        supported: supported("bge-reranker-base"),
+        cached: false,
+        download_allowed: true,
+    };
+    let mut use_case = EmbedCollections::new(generator, store, FakeClock { now: 1 }, reranker);
+    let name = RerankerModel::try_new("bge-reranker-base")?;
+
+    let report = use_case.execute(EmbedScope::All, None, Some(&name), true)?;
+
+    assert!(!report.any_failed());
 
     Ok(())
 }
