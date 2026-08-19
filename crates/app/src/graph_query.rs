@@ -37,7 +37,9 @@ pub struct GraphQueryRoot;
 
 #[Object]
 impl GraphQueryRoot {
-    /// Returns the node with the given kind and key, if present.
+    /// Returns the node with the given kind and key.
+    ///
+    /// Errors when the node does not exist in the collection (REQ-013 FR-008).
     #[allow(clippy::unused_async)]
     async fn node(
         &self,
@@ -45,7 +47,7 @@ impl GraphQueryRoot {
         collection: String,
         kind: String,
         key: String,
-    ) -> async_graphql::Result<Option<NodeOut>> {
+    ) -> async_graphql::Result<NodeOut> {
         let store = ctx.data::<StoreHandle>()?;
         let collection = parse_collection(&collection)?;
         let id = NodeId::new(parse_kind(&kind)?, key);
@@ -54,12 +56,16 @@ impl GraphQueryRoot {
             .map_err(|_| async_graphql::Error::new("graph store lock poisoned"))?;
         let node = guard
             .node(&collection, &id)
-            .map_err(|error| map_error(&error))?;
-        Ok(node.map(Into::into))
+            .map_err(|error| map_error(&error))?
+            .ok_or_else(|| node_not_found(&id))?;
+        Ok(node.into())
     }
 
     /// Returns the neighbors of the node within `max_hops`, optionally filtered
     /// by `relation`.
+    ///
+    /// Errors when the start node does not exist in the collection
+    /// (REQ-013 FR-008).
     #[allow(clippy::unused_async)]
     async fn neighbors(
         &self,
@@ -77,11 +83,27 @@ impl GraphQueryRoot {
         let guard = store
             .lock()
             .map_err(|_| async_graphql::Error::new("graph store lock poisoned"))?;
+        if guard
+            .node(&collection, &id)
+            .map_err(|error| map_error(&error))?
+            .is_none()
+        {
+            return Err(node_not_found(&id));
+        }
         let neighbors = guard
             .neighbors(&collection, &id, relation, max_hops)
             .map_err(|error| map_error(&error))?;
         Ok(neighbors.into_iter().map(Into::into).collect())
     }
+}
+
+/// Builds the node-not-found query error.
+fn node_not_found(id: &NodeId) -> async_graphql::Error {
+    async_graphql::Error::new(format!(
+        "node not found: {} {}",
+        id.kind().as_str(),
+        id.key()
+    ))
 }
 
 impl From<Neighbor> for NeighborOut {
@@ -160,7 +182,7 @@ mod tests {
         Ok(response)
     }
 
-    fn build_store() -> Result<(StoreHandle, CollectionName), Box<dyn Error>> {
+    fn build_store() -> Result<(StoreHandle, CollectionName, std::path::PathBuf), Box<dyn Error>> {
         let directory = tempdir()?;
         let database_path = directory.path().join("collections.db");
         let collection = CollectionName::try_from("Notes")?;
@@ -173,7 +195,7 @@ mod tests {
         store.upsert_files(
             &collection,
             &[
-                FileRecord::new(a, b"---\n---\n[to](b.md)\n".to_vec()),
+                FileRecord::new(a.clone(), b"---\n---\n[to](b.md)\n".to_vec()),
                 FileRecord::new(b, b"---\n---\nbody\n".to_vec()),
             ],
             Timestamp::from_unix_seconds(1_700_000_000),
@@ -186,30 +208,35 @@ mod tests {
         )?;
 
         let graph_store = SqliteGraphStore::open(&database_path)?;
-        Ok((handle(graph_store), collection))
+        Ok((handle(graph_store), collection, a))
     }
 
     #[test]
     fn neighbors_query_returns_results() -> Result<(), Box<dyn Error>> {
-        let (store, collection) = build_store()?;
+        let (store, collection, a) = build_store()?;
         let doc = format!(
-            r#"{{ neighbors(collection: "{}", kind: "file", key: "a.md", maxHops: 2) {{ key relation depth }} }}"#,
-            collection.display_name()
+            r#"{{ neighbors(collection: "{}", kind: "file", key: "{}", maxHops: 2) {{ key relation depth }} }}"#,
+            collection.display_name(),
+            a.to_string_lossy()
         );
         let response = graphql_query(store, &doc)?;
         assert!(response.errors.is_empty(), "{:?}", response.errors);
         Ok(())
     }
 
+    /// Covers: REQ-013 FR-008 — an unknown node query reports an error.
     #[test]
-    fn node_query_returns_absent_for_unknown() -> Result<(), Box<dyn Error>> {
-        let (store, collection) = build_store()?;
+    fn node_query_reports_unknown_node() -> Result<(), Box<dyn Error>> {
+        let (store, collection, _) = build_store()?;
         let doc = format!(
             r#"{{ node(collection: "{}", kind: "file", key: "zzz.md") {{ key }} }}"#,
             collection.display_name()
         );
         let response = graphql_query(store, &doc)?;
-        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        assert!(
+            !response.errors.is_empty(),
+            "expected a node-not-found error"
+        );
         Ok(())
     }
 }
