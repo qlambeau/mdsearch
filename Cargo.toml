@@ -15,6 +15,7 @@ members = [
 license = "MIT"
 
 [workspace.dependencies]
+async-graphql = { version = "7.2.1", default-features = false }
 clap = { version = "4.5", features = ["derive"] }
 fastembed = "6.0.0"
 proptest = "1.7"
@@ -24,6 +25,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
 sqlite-vector-rs = { path = "vendor/sqlite-vector-rs", default-features = false }
+tokio = { version = "1", features = ["rt"] }
 sqlite3_ext = { version = "0.2.1", features = ["with_rusqlite"] }
 tempfile = "3.20"
 thiserror = "2.0"

@@ -2,8 +2,8 @@ use thiserror::Error;
 
 use kv_application::{
     AddFilesError, CollectionStoreError, CreateCollectionError, DestroyCollectionError, EmbedError,
-    GetFileError, HybridError, IndexStatusError, ListCollectionsError, SearchError,
-    UpdateCollectionError,
+    GetFileError, GraphStoreError, HybridError, IndexStatusError, ListCollectionsError,
+    SearchError, UpdateCollectionError,
 };
 use kv_domain::{CollectionNameError, EmbeddingModelError, RerankerModelError};
 
@@ -46,6 +46,9 @@ pub enum AppError {
     /// The hybrid-search use case failed.
     #[error(transparent)]
     Hybrid(#[from] HybridError),
+    /// The graph query failed.
+    #[error(transparent)]
+    Graph(#[from] GraphStoreError),
     /// The embedding model name is invalid.
     #[error(transparent)]
     InvalidEmbeddingModel(#[from] EmbeddingModelError),

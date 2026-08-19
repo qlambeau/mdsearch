@@ -23,9 +23,9 @@ pub use embed_collections::{EmbedCollections, EmbedOutcome, EmbedReport, EmbedSc
 pub use error::{
     AddFilesError, ClockError, CollectionStoreError, CreateCollectionError, DestroyCollectionError,
     EmbedError, EmbeddingError, FileRetrievalStoreError, FileStoreError, FileSystemError,
-    GetFileError, HybridError, HybridSearchStoreError, IndexStatusError, IndexStoreError,
-    ListCollectionsError, RerankError, SearchError, SearchStoreError, SemanticIndexStoreError,
-    UpdateCollectionError,
+    GetFileError, GraphStoreError, HybridError, HybridSearchStoreError, IndexStatusError,
+    IndexStoreError, ListCollectionsError, RerankError, SearchError, SearchStoreError,
+    SemanticIndexStoreError, UpdateCollectionError,
 };
 pub use get_file::GetFile;
 pub use hybrid_search::{HybridResult, HybridResultSet, HybridSearch};
@@ -34,8 +34,9 @@ pub use lexical_search::SearchLexical;
 pub use list_collections::ListCollections;
 pub use ports::{
     Clock, CollectionStore, EmbedTarget, EmbeddingGenerator, FileRecord, FileRetrievalStore,
-    FileStore, FileSystem, HybridCandidate, HybridCandidates, HybridSearchStore, IndexState,
-    IndexStatus, LexicalIndexStore, LexicalSearchStore, Position, ReconcileOutcome, Reranker,
-    RetrievedFile, SearchResult, SearchResultSet, SearchScope, SemanticIndexStore, StoredFile,
+    FileStore, FileSystem, GraphStore, HybridCandidate, HybridCandidates, HybridSearchStore,
+    InMemoryGraphStore, IndexState, IndexStatus, LexicalIndexStore, LexicalSearchStore, Neighbor,
+    Position, ReconcileOutcome, Reranker, RetrievedFile, SearchResult, SearchResultSet,
+    SearchScope, SemanticIndexStore, StoredFile, traverse_graph,
 };
 pub use update_collection::{UpdateCollection, UpdateOutcome, UpdateTarget};

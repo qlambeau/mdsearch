@@ -16,9 +16,9 @@ fn name() -> Result<CollectionName, kv_domain::CollectionNameError> {
     CollectionName::try_from("Notes")
 }
 
-/// Covers: FR-001 and the schema version 5 migration.
+/// Covers: FR-001 and the schema version 6 migration.
 #[test]
-fn open_creates_the_tables_at_version_five() -> Result<(), Box<dyn Error>> {
+fn open_creates_the_tables_at_version_six() -> Result<(), Box<dyn Error>> {
     let directory = tempdir()?;
     let database_path = directory.path().join("collections.db");
     SqliteCollectionStore::open(&database_path)?;
@@ -48,17 +48,35 @@ fn open_creates_the_tables_at_version_five() -> Result<(), Box<dyn Error>> {
         [],
         |row| row.get(0),
     )?;
+    let nodes_table: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'nodes'",
+        [],
+        |row| row.get(0),
+    )?;
+    let edges_table: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'edges'",
+        [],
+        |row| row.get(0),
+    )?;
+    let graph_state_table: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'graph_state'",
+        [],
+        |row| row.get(0),
+    )?;
     let offset_column: i64 = connection.query_row(
         "SELECT COUNT(*) FROM pragma_table_info('passage_files') WHERE name = 'byte_offset'",
         [],
         |row| row.get(0),
     )?;
 
-    assert_eq!(version, 5);
+    assert_eq!(version, 6);
     assert_eq!(files_table, 1);
     assert_eq!(passages_table, 1);
     assert_eq!(mapping_table, 1);
     assert_eq!(state_table, 1);
+    assert_eq!(nodes_table, 1);
+    assert_eq!(edges_table, 1);
+    assert_eq!(graph_state_table, 1);
     assert_eq!(offset_column, 1);
 
     Ok(())
@@ -189,7 +207,7 @@ fn migrates_a_version_one_database_to_current() -> Result<(), Box<dyn Error>> {
             row.get(0)
         })?;
 
-    assert_eq!(version, 5);
+    assert_eq!(version, 6);
 
     Ok(())
 }
@@ -250,7 +268,7 @@ fn migrates_a_version_three_database_to_current() -> Result<(), Box<dyn Error>> 
         |row| row.get(0),
     )?;
 
-    assert_eq!(version, 5);
+    assert_eq!(version, 6);
     assert_eq!(offset_column, 1);
 
     Ok(())
