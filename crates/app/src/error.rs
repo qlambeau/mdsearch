@@ -49,6 +49,9 @@ pub enum AppError {
     /// The graph query failed.
     #[error(transparent)]
     Graph(#[from] GraphStoreError),
+    /// The graph context query failed.
+    #[error("context query failed: {0}")]
+    GraphQuery(String),
     /// The embedding model name is invalid.
     #[error(transparent)]
     InvalidEmbeddingModel(#[from] EmbeddingModelError),

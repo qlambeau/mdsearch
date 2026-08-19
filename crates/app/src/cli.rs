@@ -21,6 +21,17 @@ pub(crate) enum Command {
     Hybrid(HybridArgs),
     #[command(subcommand)]
     Graph(GraphCommand),
+    Context(ContextArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ContextArgs {
+    #[arg(value_name = "QUERY")]
+    pub(crate) query: String,
+    #[arg(long, value_name = "NAME", required = true)]
+    pub(crate) collection: String,
+    #[arg(long, value_name = "PATH")]
+    pub(crate) database: Option<PathBuf>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -69,6 +80,8 @@ pub(crate) struct SearchArgs {
     pub(crate) limit: u16,
     #[arg(long)]
     pub(crate) json: bool,
+    #[arg(long)]
+    pub(crate) related: bool,
     #[arg(long, value_name = "PATH")]
     pub(crate) database: Option<PathBuf>,
 }
@@ -108,6 +121,8 @@ pub(crate) struct HybridArgs {
     pub(crate) limit: u16,
     #[arg(long)]
     pub(crate) json: bool,
+    #[arg(long)]
+    pub(crate) related: bool,
     #[arg(long)]
     pub(crate) no_rerank: bool,
     #[arg(long, value_name = "PATH")]

@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use clap::Parser;
 use kv_application::{
     AddFiles, CreateCollection, DestroyCollection, EmbedCollections, EmbedOutcome, EmbedReport,
-    EmbedScope, GetFile, GraphStore, HybridResultSet, HybridSearch, IndexState, IndexStatus,
-    ListCollections, ReadIndexStatus, SearchLexical, SearchResultSet, SearchScope, SkipReason,
-    UpdateCollection, UpdateOutcome, UpdateTarget,
+    EmbedScope, GetFile, GraphStore, HybridResult, HybridResultSet, HybridSearch, IndexState,
+    IndexStatus, ListCollections, ReadIndexStatus, SearchLexical, SearchResult, SearchResultSet,
+    SearchScope, SkipReason, UpdateCollection, UpdateOutcome, UpdateTarget,
 };
 use kv_domain::{CollectionName, EmbeddingModel, EntityKind, NodeId, RerankerModel};
 use kv_embed_fastembed::{FastembedGenerator, FastembedReranker};
@@ -19,7 +19,11 @@ use kv_store_sqlite::{
 };
 
 use crate::AppError;
-use crate::cli::{Cli, CollectionCommand, Command, GraphCommand, IndexCommand};
+use crate::cli::{
+    Cli, CollectionCommand, Command, GraphCommand, HybridArgs, IndexCommand, SearchArgs,
+};
+use crate::graph_query::{build_schema, handle};
+use crate::related::{RelatedFile, related_files};
 
 /// Executes one `mdsearch` CLI invocation with an injected home directory.
 ///
@@ -72,14 +76,7 @@ where
         Command::Index(IndexCommand::Status(arguments)) => {
             index_status(arguments.database, home_directory)
         }
-        Command::Search(arguments) => search(
-            &arguments.query,
-            arguments.collection.as_deref(),
-            arguments.limit,
-            arguments.json,
-            arguments.database,
-            home_directory,
-        ),
+        Command::Search(arguments) => search(&arguments, home_directory),
         Command::Get(arguments) => get_file(
             &arguments.collection,
             &arguments.name_or_id,
@@ -94,18 +91,16 @@ where
             arguments.database,
             home_directory,
         ),
-        Command::Hybrid(arguments) => hybrid(
-            &arguments.query,
-            arguments.collection.as_deref(),
-            arguments.limit,
-            arguments.json,
-            arguments.no_rerank,
-            arguments.database,
-            home_directory,
-        ),
+        Command::Hybrid(arguments) => hybrid(&arguments, home_directory),
         Command::Graph(GraphCommand::Neighbors(arguments)) => graph_neighbors(
             &arguments.node,
             arguments.collection.as_deref(),
+            arguments.database,
+            home_directory,
+        ),
+        Command::Context(arguments) => context(
+            &arguments.query,
+            &arguments.collection,
             arguments.database,
             home_directory,
         ),
@@ -254,80 +249,103 @@ fn index_status(
         .join("\n"))
 }
 
-fn search(
-    query: &str,
-    collection_name: Option<&str>,
-    limit: u16,
-    json: bool,
-    database_override: Option<PathBuf>,
-    home_directory: &Path,
-) -> Result<String, AppError> {
-    if query.trim().is_empty() {
+fn search(args: &SearchArgs, home_directory: &Path) -> Result<String, AppError> {
+    if args.query.trim().is_empty() {
         return Err(AppError::Search(kv_application::SearchError::EmptyQuery));
     }
 
-    let database_path = database_override
+    let database_path = args
+        .database
+        .clone()
         .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
     let store = SqliteLexicalSearchStore::open(&database_path)?;
     let use_case = SearchLexical::new(store);
 
-    let collection = collection_name.map(CollectionName::try_from).transpose()?;
+    let collection = args
+        .collection
+        .as_deref()
+        .map(CollectionName::try_from)
+        .transpose()?;
     let scope = match collection.as_ref() {
         Some(collection) => SearchScope::Collection(collection),
         None => SearchScope::All,
     };
 
-    let set = use_case.execute(query, usize::from(limit), scope)?;
+    let set = use_case.execute(&args.query, usize::from(args.limit), scope)?;
+
+    let related_context = if args.related {
+        let graph_store = SqliteGraphStore::open(&database_path)?;
+        Some(collect_related(&graph_store, set.results()))
+    } else {
+        None
+    };
 
     let scope_name = collection.as_ref().map_or_else(
         || "all".to_owned(),
         |collection| collection.display_name().to_owned(),
     );
 
-    if json {
-        Ok(render_json(&set, query, &scope_name, limit))
+    if args.json {
+        Ok(render_json(
+            &set,
+            &args.query,
+            &scope_name,
+            args.limit,
+            related_context.as_deref(),
+        ))
     } else {
-        Ok(render_human(&set))
+        Ok(render_human(&set, related_context.as_deref()))
     }
 }
 
-fn hybrid(
-    query: &str,
-    collection_name: Option<&str>,
-    limit: u16,
-    json: bool,
-    no_rerank: bool,
-    database_override: Option<PathBuf>,
-    home_directory: &Path,
-) -> Result<String, AppError> {
-    if query.trim().is_empty() {
+fn hybrid(args: &HybridArgs, home_directory: &Path) -> Result<String, AppError> {
+    if args.query.trim().is_empty() {
         return Err(AppError::Hybrid(kv_application::HybridError::EmptyQuery));
     }
 
-    let database_path = database_override
+    let database_path = args
+        .database
+        .clone()
         .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
     let generator = FastembedGenerator::new(None);
     let reranker = FastembedReranker::new(None);
     let store = SqliteHybridSearchStore::open(&database_path)?;
     let use_case = HybridSearch::new(generator, store, reranker);
 
-    let collection = collection_name.map(CollectionName::try_from).transpose()?;
+    let collection = args
+        .collection
+        .as_deref()
+        .map(CollectionName::try_from)
+        .transpose()?;
     let scope = match collection.as_ref() {
         Some(collection) => SearchScope::Collection(collection),
         None => SearchScope::All,
     };
 
-    let set = use_case.execute(query, usize::from(limit), scope, !no_rerank)?;
+    let set = use_case.execute(&args.query, usize::from(args.limit), scope, !args.no_rerank)?;
+
+    let related_context = if args.related {
+        let graph_store = SqliteGraphStore::open(&database_path)?;
+        Some(collect_related(&graph_store, set.results()))
+    } else {
+        None
+    };
 
     let scope_name = collection.as_ref().map_or_else(
         || "all".to_owned(),
         |collection| collection.display_name().to_owned(),
     );
 
-    let rendered = if json {
-        render_hybrid_json(&set, query, &scope_name, limit)
+    let rendered = if args.json {
+        render_hybrid_json(
+            &set,
+            &args.query,
+            &scope_name,
+            args.limit,
+            related_context.as_deref(),
+        )
     } else {
-        render_hybrid_human(&set)
+        render_hybrid_human(&set, related_context.as_deref())
     };
 
     Ok(rendered)
@@ -392,7 +410,40 @@ fn graph_neighbors(
     )))
 }
 
-fn render_human(set: &SearchResultSet) -> String {
+/// Executes an in-process GraphQL query against the entity graph and prints the
+/// JSON result.
+///
+/// The command is read-only: it opens the database without initializing it, so
+/// a missing database fails without creating a file.
+fn context(
+    query: &str,
+    collection_name: &str,
+    database_override: Option<PathBuf>,
+    home_directory: &Path,
+) -> Result<String, AppError> {
+    let _collection = CollectionName::try_from(collection_name)?;
+    let database_path = database_override
+        .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
+    let store = SqliteGraphStore::open(&database_path)?;
+    let schema = build_schema(handle(store));
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .map_err(|error| AppError::GraphQuery(error.to_string()))?;
+    let response = runtime.block_on(schema.execute(query));
+
+    if !response.errors.is_empty() {
+        let message = response.errors.first().map_or_else(
+            || "graph query failed".to_owned(),
+            |error| error.message.clone(),
+        );
+        return Err(AppError::GraphQuery(message));
+    }
+
+    serde_json::to_string(&response.data).map_err(|error| AppError::GraphQuery(error.to_string()))
+}
+
+fn render_human(set: &SearchResultSet, related: Option<&[Vec<RelatedFile>]>) -> String {
     let mut lines = Vec::new();
     for (index, result) in set.results().iter().enumerate() {
         let position = result.position();
@@ -417,6 +468,7 @@ fn render_human(set: &SearchResultSet) -> String {
         };
         lines.push(header);
         lines.push(result.text().to_owned());
+        render_related_lines(&mut lines, related, index);
     }
     if !set.results().is_empty() {
         lines.push(format!("{} match(es)", set.total()));
@@ -424,13 +476,77 @@ fn render_human(set: &SearchResultSet) -> String {
     lines.join("\n")
 }
 
-fn render_json(set: &SearchResultSet, query: &str, scope: &str, limit: u16) -> String {
+/// Appends the `related: <path> (<RELATION>)` lines for the result at `index`.
+fn render_related_lines(
+    lines: &mut Vec<String>,
+    related: Option<&[Vec<RelatedFile>]>,
+    index: usize,
+) {
+    let Some(related) = related else {
+        return;
+    };
+    for file in related.get(index).into_iter().flatten() {
+        lines.push(format!(
+            "related: {} ({})",
+            file.path().display(),
+            file.relation().as_str()
+        ));
+    }
+}
+
+/// A ranked result that exposes the file whose related context is recovered.
+trait RelatedResult {
+    /// Returns the collection the result belongs to.
+    fn collection(&self) -> &CollectionName;
+    /// Returns the result file path.
+    fn path(&self) -> &Path;
+}
+
+impl RelatedResult for SearchResult {
+    fn collection(&self) -> &CollectionName {
+        SearchResult::collection(self)
+    }
+
+    fn path(&self) -> &Path {
+        SearchResult::path(self)
+    }
+}
+
+impl RelatedResult for HybridResult {
+    fn collection(&self) -> &CollectionName {
+        HybridResult::collection(self)
+    }
+
+    fn path(&self) -> &Path {
+        HybridResult::path(self)
+    }
+}
+
+/// Collects the per-result related context in result order.
+fn collect_related<T>(store: &dyn GraphStore, results: &[T]) -> Vec<Vec<RelatedFile>>
+where
+    T: RelatedResult,
+{
+    results
+        .iter()
+        .map(|result| related_files(store, result.collection(), result.path()))
+        .collect()
+}
+
+fn render_json(
+    set: &SearchResultSet,
+    query: &str,
+    scope: &str,
+    limit: u16,
+    related: Option<&[Vec<RelatedFile>]>,
+) -> String {
     let results: Vec<serde_json::Value> = set
         .results()
         .iter()
-        .map(|result| {
+        .enumerate()
+        .map(|(index, result)| {
             let position = result.position();
-            serde_json::json!({
+            let mut value = serde_json::json!({
                 "collection": result.collection().display_name(),
                 "path": result.path().to_string_lossy(),
                 "kind": result.kind().as_str(),
@@ -442,7 +558,9 @@ fn render_json(set: &SearchResultSet, query: &str, scope: &str, limit: u16) -> S
                     "line_start": position.line_start(),
                     "line_end": position.line_end(),
                 },
-            })
+            });
+            append_related_field(&mut value, related, index);
+            value
         })
         .collect();
 
@@ -456,7 +574,30 @@ fn render_json(set: &SearchResultSet, query: &str, scope: &str, limit: u16) -> S
     .to_string()
 }
 
-fn render_hybrid_human(set: &HybridResultSet) -> String {
+/// Adds the `related` field to a result JSON object when context is present.
+fn append_related_field(
+    value: &mut serde_json::Value,
+    related: Option<&[Vec<RelatedFile>]>,
+    index: usize,
+) {
+    let Some(related) = related else {
+        return;
+    };
+    let entries: Vec<serde_json::Value> = related
+        .get(index)
+        .into_iter()
+        .flatten()
+        .map(|file| {
+            serde_json::json!({
+                "path": file.path().to_string_lossy(),
+                "relation": file.relation().as_str(),
+            })
+        })
+        .collect();
+    value["related"] = serde_json::json!(entries);
+}
+
+fn render_hybrid_human(set: &HybridResultSet, related: Option<&[Vec<RelatedFile>]>) -> String {
     let mut lines = Vec::new();
     for (index, result) in set.results().iter().enumerate() {
         let position = result.position();
@@ -481,6 +622,7 @@ fn render_hybrid_human(set: &HybridResultSet) -> String {
         };
         lines.push(header);
         lines.push(result.text().to_owned());
+        render_related_lines(&mut lines, related, index);
     }
     if !set.results().is_empty() {
         lines.push(format!("{} result(s)", set.results().len()));
@@ -491,13 +633,20 @@ fn render_hybrid_human(set: &HybridResultSet) -> String {
     lines.join("\n")
 }
 
-fn render_hybrid_json(set: &HybridResultSet, query: &str, scope: &str, limit: u16) -> String {
+fn render_hybrid_json(
+    set: &HybridResultSet,
+    query: &str,
+    scope: &str,
+    limit: u16,
+    related: Option<&[Vec<RelatedFile>]>,
+) -> String {
     let results: Vec<serde_json::Value> = set
         .results()
         .iter()
-        .map(|result| {
+        .enumerate()
+        .map(|(index, result)| {
             let position = result.position();
-            serde_json::json!({
+            let mut value = serde_json::json!({
                 "collection": result.collection().display_name(),
                 "path": result.path().to_string_lossy(),
                 "kind": result.kind().as_str(),
@@ -513,7 +662,9 @@ fn render_hybrid_json(set: &HybridResultSet, query: &str, scope: &str, limit: u1
                     "line_start": position.line_start(),
                     "line_end": position.line_end(),
                 },
-            })
+            });
+            append_related_field(&mut value, related, index);
+            value
         })
         .collect();
 
@@ -637,13 +788,109 @@ fn format_update(display_name: &str, outcome: &UpdateOutcome) -> String {
 
 #[cfg(test)]
 mod tests {
-    use kv_application::{EmbedOutcome, EmbedReport, SkipReason};
-    use kv_domain::CollectionName;
+    use std::path::PathBuf;
 
-    use super::{render_embed_outcome, render_embed_report};
+    use kv_application::{
+        EmbedOutcome, EmbedReport, Position, SearchResult, SearchResultSet, SkipReason,
+    };
+    use kv_domain::{CollectionName, PassageKind, RelationKind};
+
+    use crate::related::RelatedFile;
+
+    use super::{
+        render_embed_outcome, render_embed_report, render_human, render_json, render_related_lines,
+    };
 
     fn collection(name: &str) -> Result<CollectionName, kv_domain::CollectionNameError> {
         CollectionName::try_from(name)
+    }
+
+    fn result(path: &str) -> Result<SearchResult, Box<dyn std::error::Error>> {
+        Ok(SearchResult::new(
+            collection("Notes")?,
+            PathBuf::from(path),
+            PassageKind::Body,
+            "body text".to_owned(),
+            1.0,
+            Position::new(0, 10, 0, 0),
+        ))
+    }
+
+    fn related(path: &str, relation: RelationKind) -> RelatedFile {
+        RelatedFile::new(PathBuf::from(path), relation)
+    }
+
+    /// Covers: REQ-013 FR-002 — human output adds `related:` lines.
+    #[test]
+    fn human_output_adds_related_lines() -> Result<(), Box<dyn std::error::Error>> {
+        let set = SearchResultSet::new(vec![result("a.md")?], 1);
+        let related = vec![vec![related("b.md", RelationKind::LinksTo)]];
+        let output = render_human(&set, Some(&related));
+        assert!(output.contains("related: b.md (LINKS_TO)"));
+        Ok(())
+    }
+
+    /// Covers: REQ-013 FR-002 — results without related files add no line.
+    #[test]
+    fn human_output_adds_no_line_without_related() -> Result<(), Box<dyn std::error::Error>> {
+        let set = SearchResultSet::new(vec![result("a.md")?], 1);
+        let output = render_human(&set, None);
+        assert!(!output.contains("related:"));
+        Ok(())
+    }
+
+    /// Covers: REQ-013 FR-003 — JSON output includes a related field.
+    #[test]
+    fn json_output_includes_related_field() -> Result<(), Box<dyn std::error::Error>> {
+        let set = SearchResultSet::new(vec![result("a.md")?], 1);
+        let related = vec![vec![related("b.md", RelationKind::LinksTo)]];
+        let output = render_json(&set, "rust", "all", 10, Some(&related));
+        let value: serde_json::Value = serde_json::from_str(&output)?;
+        let entry = value
+            .get("results")
+            .and_then(|results| results.get(0))
+            .and_then(|result| result.get("related"))
+            .and_then(|related| related.get(0))
+            .ok_or("expected a related entry")?;
+        assert_eq!(entry["path"], "b.md");
+        assert_eq!(entry["relation"], "LINKS_TO");
+        Ok(())
+    }
+
+    /// Covers: REQ-013 FR-003 — JSON output omits the field without --related.
+    #[test]
+    fn json_output_omits_related_field_without_flag() -> Result<(), Box<dyn std::error::Error>> {
+        let set = SearchResultSet::new(vec![result("a.md")?], 1);
+        let output = render_json(&set, "rust", "all", 10, None);
+        let value: serde_json::Value = serde_json::from_str(&output)?;
+        let first = value
+            .get("results")
+            .and_then(|results| results.get(0))
+            .ok_or("expected a result")?;
+        assert!(first.get("related").is_none());
+        Ok(())
+    }
+
+    /// Covers: REQ-013 FR-004 — ranked results are unchanged by --related.
+    #[test]
+    fn ranked_results_are_unchanged_by_related() -> Result<(), Box<dyn std::error::Error>> {
+        let set = SearchResultSet::new(vec![result("a.md")?], 1);
+        let related = vec![vec![related("b.md", RelationKind::LinksTo)]];
+        let with = render_human(&set, Some(&related));
+        let without = render_human(&set, None);
+        let first_line_with = with.lines().next().ok_or("expected a header")?;
+        let first_line_without = without.lines().next().ok_or("expected a header")?;
+        assert_eq!(first_line_with, first_line_without);
+        Ok(())
+    }
+
+    /// Covers: REQ-013 FR-002 — related rendering aligns by result index.
+    #[test]
+    fn related_lines_render_in_result_order() {
+        let mut lines = Vec::new();
+        let related = vec![vec![related("b.md", RelationKind::LinksTo)]];
+        render_related_lines(&mut lines, Some(&related), 0);
+        assert_eq!(lines, vec!["related: b.md (LINKS_TO)"]);
     }
 
     /// Covers: FR-016 — an embedded outcome reports its passage count.
