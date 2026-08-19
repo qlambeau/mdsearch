@@ -8,7 +8,8 @@ the `mdsearch` Markdown Knowledge Search CLI described by `PRD-001`.
 
 ## Read First
 
-- Read `README.md` for repository orientation and layout.
+- Read `README.md` for the `mdsearch` tool manual and repository orientation.
+- Read `docs/SDD_WORKFLOW_KIT.md` for the spec-first workflow kit documentation.
 - Read `SDD_WORKFLOW.md` for the complete specification workflow and gates.
 - Read the complete `specs/CONSTITUTION.md` before the first Rust edit in a session; it is the normative engineering authority.
 - Read the applicable PRD under `specs/prds/` before refining or implementing a feature.
