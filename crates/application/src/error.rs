@@ -286,6 +286,20 @@ pub enum HybridError {
     Store(#[from] HybridSearchStoreError),
 }
 
+/// Describes a failure while reading the entity graph.
+#[derive(Debug, Error)]
+pub enum GraphStoreError {
+    /// The requested collection does not exist.
+    #[error("collection not found")]
+    CollectionNotFound,
+    /// The selected database does not exist.
+    #[error("database does not exist")]
+    DatabaseNotFound,
+    /// The database operation failed after it was opened.
+    #[error("graph storage failed")]
+    Storage(#[source] Box<dyn Error + Send + Sync>),
+}
+
 /// Describes a failure from the embed-collections use case.
 #[derive(Debug, Error)]
 pub enum EmbedError {

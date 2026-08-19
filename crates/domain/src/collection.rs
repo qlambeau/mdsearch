@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 /// A validated collection name with its display and comparison forms.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct CollectionName {
     display_name: String,
     name_key: String,

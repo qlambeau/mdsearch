@@ -5,6 +5,7 @@ edition = "2024"
 license.workspace = true
 
 [dependencies]
+async-graphql.workspace = true
 clap.workspace = true
 kv-application.workspace = true
 kv-domain.workspace = true
@@ -13,6 +14,7 @@ kv-infrastructure.workspace = true
 kv-store-sqlite.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true

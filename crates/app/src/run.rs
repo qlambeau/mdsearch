@@ -5,20 +5,21 @@ use std::path::{Path, PathBuf};
 use clap::Parser;
 use kv_application::{
     AddFiles, CreateCollection, DestroyCollection, EmbedCollections, EmbedOutcome, EmbedReport,
-    EmbedScope, GetFile, HybridResultSet, HybridSearch, IndexState, IndexStatus, ListCollections,
-    ReadIndexStatus, SearchLexical, SearchResultSet, SearchScope, SkipReason, UpdateCollection,
-    UpdateOutcome, UpdateTarget,
+    EmbedScope, GetFile, GraphStore, HybridResultSet, HybridSearch, IndexState, IndexStatus,
+    ListCollections, ReadIndexStatus, SearchLexical, SearchResultSet, SearchScope, SkipReason,
+    UpdateCollection, UpdateOutcome, UpdateTarget,
 };
-use kv_domain::{CollectionName, EmbeddingModel, RerankerModel};
+use kv_domain::{CollectionName, EmbeddingModel, EntityKind, NodeId, RerankerModel};
 use kv_embed_fastembed::{FastembedGenerator, FastembedReranker};
 use kv_infrastructure::{SystemClock, SystemFileSystem};
 use kv_store_sqlite::{
-    SqliteCollectionStore, SqliteFileRetrievalStore, SqliteFileStore, SqliteHybridSearchStore,
-    SqliteLexicalIndexStore, SqliteLexicalSearchStore, SqliteSemanticIndexStore,
+    SqliteCollectionStore, SqliteFileRetrievalStore, SqliteFileStore, SqliteGraphStore,
+    SqliteHybridSearchStore, SqliteLexicalIndexStore, SqliteLexicalSearchStore,
+    SqliteSemanticIndexStore,
 };
 
 use crate::AppError;
-use crate::cli::{Cli, CollectionCommand, Command, IndexCommand};
+use crate::cli::{Cli, CollectionCommand, Command, GraphCommand, IndexCommand};
 
 /// Executes one `mdsearch` CLI invocation with an injected home directory.
 ///
@@ -99,6 +100,12 @@ where
             arguments.limit,
             arguments.json,
             arguments.no_rerank,
+            arguments.database,
+            home_directory,
+        ),
+        Command::Graph(GraphCommand::Neighbors(arguments)) => graph_neighbors(
+            &arguments.node,
+            arguments.collection.as_deref(),
             arguments.database,
             home_directory,
         ),
@@ -340,6 +347,49 @@ fn get_file(
     let file = use_case.execute(&collection, name_or_id)?;
 
     String::from_utf8(file.content().to_vec()).map_err(|_| AppError::NonUtf8Content)
+}
+
+fn graph_neighbors(
+    raw_node: &str,
+    collection_name: Option<&str>,
+    database_override: Option<PathBuf>,
+    home_directory: &Path,
+) -> Result<String, AppError> {
+    let database_path = database_override
+        .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
+    let store = SqliteGraphStore::open(&database_path)?;
+
+    let collections: Vec<CollectionName> = if let Some(name) = collection_name {
+        vec![CollectionName::try_from(name)?]
+    } else {
+        let collection_store = SqliteCollectionStore::open_existing(&database_path)?;
+        ListCollections::new(collection_store).execute()?
+    };
+
+    let mut lines = Vec::new();
+    for collection in &collections {
+        for kind in [EntityKind::File, EntityKind::Tag, EntityKind::Alias] {
+            let id = NodeId::new(kind, raw_node.to_owned());
+            if store.node(collection, &id)?.is_none() {
+                continue;
+            }
+            let neighbors = store.neighbors(collection, &id, None, 3)?;
+            lines.push(format!("{}:", id.key()));
+            for neighbor in neighbors {
+                lines.push(format!(
+                    "  {} {} (depth {})",
+                    neighbor.relation().as_str(),
+                    neighbor.node().id().key(),
+                    neighbor.depth()
+                ));
+            }
+            return Ok(lines.join("\n"));
+        }
+    }
+
+    Err(AppError::Graph(kv_application::GraphStoreError::Storage(
+        format!("node not found: {raw_node}").into(),
+    )))
 }
 
 fn render_human(set: &SearchResultSet) -> String {

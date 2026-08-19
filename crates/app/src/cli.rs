@@ -19,6 +19,8 @@ pub(crate) enum Command {
     Get(GetArgs),
     Embed(EmbedArgs),
     Hybrid(HybridArgs),
+    #[command(subcommand)]
+    Graph(GraphCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -33,6 +35,21 @@ pub(crate) enum CollectionCommand {
 #[derive(Debug, Subcommand)]
 pub(crate) enum IndexCommand {
     Status(IndexStatusArgs),
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum GraphCommand {
+    Neighbors(GraphNeighborsArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct GraphNeighborsArgs {
+    #[arg(value_name = "ID")]
+    pub(crate) node: String,
+    #[arg(long, value_name = "NAME")]
+    pub(crate) collection: Option<String>,
+    #[arg(long, value_name = "PATH")]
+    pub(crate) database: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
