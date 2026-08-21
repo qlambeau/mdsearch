@@ -104,7 +104,10 @@ pub(crate) struct EmbedArgs {
     pub(crate) model: Option<String>,
     #[arg(long, value_name = "NAME")]
     pub(crate) reranker: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "download model assets if not already downloaded (stored under ~/.mdsearch/models by default)"
+    )]
     pub(crate) download: bool,
     #[arg(long, value_name = "PATH")]
     pub(crate) database: Option<PathBuf>,

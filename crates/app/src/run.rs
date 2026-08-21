@@ -23,6 +23,7 @@ use crate::cli::{
     Cli, CollectionCommand, Command, GraphCommand, HybridArgs, IndexCommand, SearchArgs,
 };
 use crate::graph_query::{build_schema, handle};
+use crate::model_cache;
 use crate::related::{RelatedFile, related_files};
 
 /// Executes one `mdsearch` CLI invocation with an injected home directory.
@@ -307,8 +308,9 @@ fn hybrid(args: &HybridArgs, home_directory: &Path) -> Result<String, AppError> 
         .database
         .clone()
         .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
-    let generator = FastembedGenerator::new(None);
-    let reranker = FastembedReranker::new(None);
+    let cache_dir = model_cache::model_cache_dir(home_directory);
+    let generator = FastembedGenerator::new(cache_dir.clone());
+    let reranker = FastembedReranker::new(cache_dir);
     let store = SqliteHybridSearchStore::open(&database_path)?;
     let use_case = HybridSearch::new(generator, store, reranker);
 
@@ -690,8 +692,9 @@ fn embed(
 ) -> Result<String, AppError> {
     let database_path = database_override
         .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
-    let generator = FastembedGenerator::new(None);
-    let reranker = FastembedReranker::new(None);
+    let cache_dir = model_cache::model_cache_dir(home_directory);
+    let generator = FastembedGenerator::new(cache_dir.clone());
+    let reranker = FastembedReranker::new(cache_dir);
     let store = SqliteSemanticIndexStore::open_for_embedding(&database_path)?;
     let mut use_case = EmbedCollections::new(generator, store, SystemClock, reranker);
 

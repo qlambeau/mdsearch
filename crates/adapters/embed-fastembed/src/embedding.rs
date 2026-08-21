@@ -5,20 +5,21 @@ use fastembed::{EmbeddingModel as FastembedModel, TextEmbedding, TextInitOptions
 use kv_application::EmbeddingGenerator;
 use kv_domain::{Embedding, EmbeddingModel};
 
+use crate::marker;
+
 /// Generates text embeddings locally with `fastembed`.
 pub struct FastembedGenerator {
     session: RefCell<Option<TextEmbedding>>,
-    cache_dir: Option<PathBuf>,
+    cache_dir: PathBuf,
 }
 
 impl FastembedGenerator {
-    /// Creates a generator that loads models from fastembed's cache.
+    /// Creates a generator that loads models from the given cache directory.
     ///
-    /// When `cache_dir` is `None`, the cache directory is resolved from the
-    /// `HF_HOME`, then `FASTEMBED_CACHE_DIR`, then the default
-    /// `.fastembed_cache` directory, matching fastembed's resolution order.
+    /// The cache directory is resolved once by the caller (ADR-012): the
+    /// embedding adapter no longer inspects environment variables.
     #[must_use]
-    pub fn new(cache_dir: Option<PathBuf>) -> Self {
+    pub fn new(cache_dir: PathBuf) -> Self {
         Self {
             session: RefCell::new(None),
             cache_dir,
@@ -33,9 +34,8 @@ impl EmbeddingGenerator for FastembedGenerator {
         download: bool,
     ) -> Result<(), kv_application::EmbeddingError> {
         let fastembed_model = resolve_model(model)?;
-        let cache_dir = self.effective_cache_dir();
 
-        if model_is_cached(&cache_dir, &fastembed_model) {
+        if marker::marker_exists(&self.cache_dir, model.as_str()) {
             return Ok(());
         }
 
@@ -45,7 +45,9 @@ impl EmbeddingGenerator for FastembedGenerator {
             });
         }
 
-        let session = build_session(fastembed_model, &cache_dir)?;
+        let session = build_session(fastembed_model, &self.cache_dir)?;
+        marker::write_marker(&self.cache_dir, model.as_str())
+            .map_err(|source| kv_application::EmbeddingError::Storage(Box::new(source)))?;
         *self.session.borrow_mut() = Some(session);
 
         Ok(())
@@ -60,13 +62,12 @@ impl EmbeddingGenerator for FastembedGenerator {
 
         let mut session = self.session.borrow_mut();
         if session.is_none() {
-            let cache_dir = self.effective_cache_dir();
-            if !model_is_cached(&cache_dir, &fastembed_model) {
+            if !marker::marker_exists(&self.cache_dir, model.as_str()) {
                 return Err(kv_application::EmbeddingError::ModelNotCached {
                     model: model.as_str().to_owned(),
                 });
             }
-            *session = Some(build_session(fastembed_model, &cache_dir)?);
+            *session = Some(build_session(fastembed_model, &self.cache_dir)?);
         }
 
         let model = session.as_mut().ok_or_else(|| {
@@ -79,21 +80,6 @@ impl EmbeddingGenerator for FastembedGenerator {
             .map_err(|error| kv_application::EmbeddingError::Storage(Box::new(error)))?;
 
         Ok(vectors.into_iter().map(Embedding::new).collect())
-    }
-}
-
-impl FastembedGenerator {
-    fn effective_cache_dir(&self) -> PathBuf {
-        if let Some(cache_dir) = &self.cache_dir {
-            return cache_dir.clone();
-        }
-        if let Ok(hf_home) = std::env::var("HF_HOME") {
-            return PathBuf::from(hf_home);
-        }
-        if let Ok(cache_dir) = std::env::var("FASTEMBED_CACHE_DIR") {
-            return PathBuf::from(cache_dir);
-        }
-        PathBuf::from(".fastembed_cache")
     }
 }
 
@@ -141,33 +127,13 @@ fn build_session(
     })
 }
 
-/// Returns whether the model's primary file is present in the local cache.
-///
-/// The check mirrors the hf-hub cache layout fastembed uses: the repo folder
-/// holds a `refs/main` pointer to a commit hash, and the model file lives under
-/// `snapshots/{commit}/{file}`.
-fn model_is_cached(cache_dir: &Path, model: &FastembedModel) -> bool {
-    let Some(info) = fastembed::TextEmbedding::get_model_info(model).ok() else {
-        return false;
-    };
-    let folder = cache_dir.join(info.model_code.replace('/', "--"));
-    let commit_path = folder.join("refs").join("main");
-    let Ok(commit) = std::fs::read_to_string(commit_path) else {
-        return false;
-    };
-    let snapshot = folder.join("snapshots").join(commit.trim());
-    snapshot.join(&info.model_file).exists()
-}
-
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use tempfile::tempdir;
 
     use super::friendly_model;
-    use super::model_is_cached;
     use super::resolve_model;
+    use crate::marker;
     use fastembed::EmbeddingModel as FastembedModel;
     use kv_application::EmbeddingGenerator;
     use kv_domain::EmbeddingModel;
@@ -203,7 +169,7 @@ mod tests {
     fn uncached_model_fails_without_download() -> Result<(), Box<dyn std::error::Error>> {
         let cache_dir = tempdir()?;
         let model = EmbeddingModel::try_new("all-MiniLM-L6-v2")?;
-        let generator = super::FastembedGenerator::new(Some(cache_dir.path().to_owned()));
+        let generator = super::FastembedGenerator::new(cache_dir.path().to_owned());
 
         assert!(matches!(
             generator.ensure_available(&model, false),
@@ -213,22 +179,42 @@ mod tests {
         Ok(())
     }
 
-    /// Covers: DES-010 — the availability check matches the hf-hub cache layout.
+    /// Covers: REQ-017 FR-004/FR-005 — a completion marker alone makes the
+    /// model available without any hf-hub layout.
     #[test]
-    fn availability_check_matches_hf_hub_cache_layout() -> Result<(), Box<dyn std::error::Error>> {
+    fn downloaded_model_is_recognized_via_marker() -> Result<(), Box<dyn std::error::Error>> {
         let cache_dir = tempdir()?;
-        let info = fastembed::TextEmbedding::get_model_info(&FastembedModel::AllMiniLML6V2)?;
-        let folder = cache_dir.path().join(info.model_code.replace('/', "--"));
-        let snapshot = folder.join("snapshots").join("abcdef");
-        fs::create_dir_all(&snapshot)?;
-        fs::create_dir_all(folder.join("refs"))?;
-        fs::write(folder.join("refs").join("main"), "abcdef")?;
-        fs::write(snapshot.join(&info.model_file), b"fake onnx")?;
+        let model = EmbeddingModel::try_new("all-MiniLM-L6-v2")?;
+        marker::write_marker(cache_dir.path(), model.as_str())?;
+        let generator = super::FastembedGenerator::new(cache_dir.path().to_owned());
 
-        assert!(model_is_cached(
-            cache_dir.path(),
-            &FastembedModel::AllMiniLML6V2
-        ));
+        assert!(generator.ensure_available(&model, false).is_ok());
+
+        Ok(())
+    }
+
+    /// Covers: REQ-017 FR-004 — an existing marker avoids re-downloading.
+    #[test]
+    fn existing_marker_avoids_redownload() -> Result<(), Box<dyn std::error::Error>> {
+        let cache_dir = tempdir()?;
+        let model = EmbeddingModel::try_new("all-MiniLM-L6-v2")?;
+        marker::write_marker(cache_dir.path(), model.as_str())?;
+        let generator = super::FastembedGenerator::new(cache_dir.path().to_owned());
+
+        assert!(generator.ensure_available(&model, true).is_ok());
+
+        Ok(())
+    }
+
+    /// Covers: REQ-017 FR-004 — the marker round-trips through the cache
+    /// directory.
+    #[test]
+    fn marker_round_trips_through_cache_directory() -> Result<(), Box<dyn std::error::Error>> {
+        let cache_dir = tempdir()?;
+
+        marker::write_marker(cache_dir.path(), "all-MiniLM-L6-v2")?;
+
+        assert!(marker::marker_exists(cache_dir.path(), "all-MiniLM-L6-v2"));
 
         Ok(())
     }

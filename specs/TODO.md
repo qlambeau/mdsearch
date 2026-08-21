@@ -701,6 +701,198 @@ execution for future compatibility.
 
 ---
 
+## OBS-014 — `--download` stores model assets outside the `.mdsearch` data directory
+
+- **Kind:** Behavior inconsistency
+- **Priority:** Medium
+- **Status:** `PROMOTED` — committed as EPIC-011 in `PRD-001` (US-017,
+  `specs/017-model-cache-placement`); resolved decision recorded as DEC-016
+- **Locations:**
+  - `crates/adapters/embed-fastembed/src/embedding.rs:21-26,86-98` —
+    `FastembedGenerator::new` / `effective_cache_dir` resolve the model cache
+    from `HF_HOME`, then `FASTEMBED_CACHE_DIR`, then the default
+    `.fastembed_cache` directory (relative to the current working directory)
+  - `crates/adapters/embed-fastembed/src/rerank.rs:95-105` — the reranker
+    adapter repeats the same resolution order
+  - `crates/app/src/run.rs:90,687-706` and `crates/app/src/cli.rs:108` — the
+    `--download` switch is threaded through `embed` and `hybrid` and reaches the
+    adapters unchanged
+  - Contrast: `crates/app/src/run.rs:117` — the single embedded database lives
+    in the user's home directory under `~/.mdsearch/collections.db`
+
+### Observation
+
+When `--download` is passed to `embed` (or `hybrid`), the default model
+`all-MiniLM-L6-v2` is fetched into fastembed's resolved cache directory: the
+first set environment variable (`HF_HOME`, `FASTEMBED_CACHE_DIR`), or a
+`.fastembed_cache` folder relative to the current working directory if neither
+is set. The model assets therefore land outside the product's own data
+directory (`~/.mdsearch`), which is where the embedded database — the product's
+"one database file per machine" home — lives.
+
+### Impact
+
+- Model assets are hidden in the working directory (`.fastembed_cache`) or in
+  an unrelated environment-variable location, so a user who opts into
+  `--download` cannot predict where a large download was written, and a
+  different working directory can silently re-download the same model.
+- The `mdsearch` data directory (`~/.mdsearch`) no longer contains everything
+  the tool persists on the machine, complicating backup, cleanup, and offline
+  portability of the default local-first setup.
+
+### Open questions (owner decision required)
+
+1. Should the default model cache be relocated to the `.mdsearch` data
+   directory (e.g. `~/.mdsearch/models` or similar) with the
+   `HF_HOME`/`FASTEMBED_CACHE_DIR` env vars still honored as overrides, or
+   should `.mdsearch` be the authoritative location with no override?
+2. Should the change apply to the reranker cache as well as the embedding
+   model cache (both share `effective_cache_dir`)?
+3. Should the `.fastembed_cache`-in-cwd fallback be removed or merely
+   re-ordered after the `.mdsearch` location?
+
+### Candidate epic direction
+
+"Model cache placement" — resolve the default cache directory to a location
+inside the `.mdsearch` data directory, document the resolution order in the
+CLI help and README, and add adapter-level tests asserting the download target
+for the default model.
+
+---
+
+## OBS-015 — `embed` reports "pass --download" even when the model was already downloaded
+
+- **Kind:** Robustness / correctness
+- **Priority:** Medium
+- **Status:** `PROMOTED` — committed as EPIC-011 in `PRD-001` (US-017,
+  `specs/017-model-cache-placement`); resolved decision recorded as DEC-016
+  (linked to OBS-014)
+- **Locations:**
+  - `crates/adapters/embed-fastembed/src/embedding.rs:36-52` —
+    `ensure_available` returns `ModelNotCached` whenever `model_is_cached` is
+    false and `--download` was not passed
+  - `crates/adapters/embed-fastembed/src/embedding.rs:149-160` —
+    `model_is_cached` requires the `refs/main` pointer file and the single
+    primary `model_file` under `snapshots/{commit}/` in a strict hf-hub layout
+  - `crates/adapters/embed-fastembed/src/embedding.rs:86-98` —
+    `effective_cache_dir` resolves the checked location (see OBS-014)
+  - `crates/adapters/embed-fastembed/src/rerank.rs:33-48,156-170` — the
+    reranker repeats the same check and failure path
+  - `crates/application/src/error.rs:195-197` — the surfaced message:
+    `"embedding model {model} is not available locally; pass --download to fetch it"`
+  - `crates/app/src/run.rs:693-694` — the CLI builds both adapters with
+    `::new(None)`, i.e. no cache-dir override from the `.mdsearch` data
+    directory
+
+### Observation
+
+After a successful `mdsearch embed --download`, a subsequent plain `mdsearch
+embed` can still fail with the usage-style message telling the user to pass
+`--download` — even though the model assets are present on disk. The
+availability check is a layout probe (`refs/main` + one primary file in a
+`snapshots/{commit}` folder) against a cache location resolved per-process from
+`HF_HOME` / `FASTEMBED_CACHE_DIR` / the current working directory's
+`.fastembed_cache`. Any of the following makes the probe false-negative:
+
+1. The download and the check ran from different working directories or with
+   different environment variables, so each resolves a different cache location
+   (the OBS-014 root cause);
+2. The download left assets in the snapshot but no `refs/main` pointer (e.g. an
+   interrupted or partial fetch that still satisfied the file), which the probe
+   treats as "not cached";
+3. The probe only verifies the single primary model file, so it can both
+   false-negative (other layout drift) and false-positive (missing auxiliary
+   files) against what `TextEmbedding::try_new` actually needs.
+
+### Impact
+
+- A misleading, confident instruction: the user is told a download is required
+  when the model was already fetched, prompting repeated full re-downloads.
+- The error text states a fact ("not available locally") the tool has not
+  reliably established — fragile detection in the same spirit as OBS-003.
+- The `--download` path masks the problem (it downloads again into whatever
+  location is resolved), so the failure only surfaces as confusing usage text.
+
+### Open questions (owner decision required)
+
+1. Should "downloaded" state be recorded durably (e.g. a manifest under the
+   `.mdsearch` data directory) instead of inferred from a cache-layout probe?
+2. Should the message distinguish "never downloaded" from "downloaded but not
+   found at the resolved cache location", so the fix (run from the same
+   directory / set the same env / pass `--download`) is actionable?
+3. Should the probe verify all files fastembed requires rather than the single
+   primary file?
+
+### Candidate epic direction
+
+Fold into the OBS-014 "Model cache placement" epic: a stable product-owned
+model location, durable availability state, and an accurate user-facing
+message that distinguishes "not downloaded" from "downloaded elsewhere".
+
+---
+
+## OBS-016 — `embed` gives no progress feedback during long ingestion runs
+
+- **Kind:** Scalability / performance (user experience at PRD scale)
+- **Priority:** Medium (PRD-scale collections: 100–5,000 docs, 100–300 page files)
+- **Status:** `CANDIDATE`
+- **Locations:**
+  - `crates/application/src/embed_collections.rs:312-323` — the whole
+    collection's passages are loaded and embedded in one batched
+    `generator.embed(model, &texts)` call
+  - `crates/adapters/embed-fastembed/src/embedding.rs:54-82` — `embed()` runs
+    every text through `model.embed(texts, None)` in a single blocking call
+    with no progress callback
+  - `crates/application/src/embed_collections.rs:332-335` — `store.rebuild`
+    writes all embeddings in one transaction after the batch completes
+  - `crates/adapters/store-sqlite/src/lib.rs:1461-1478+` — `rebuild` inserts
+    every passage row in a single transaction
+  - `crates/app/src/run.rs:706-713` — the CLI blocks on `use_case.execute` and
+    prints only the final per-collection report (`render_embed_report`), so
+    nothing is emitted until the entire run finishes
+
+### Observation
+
+`mdsearch embed` performs the embedding pass as an all-or-nothing batch: load
+every passage of every targeted collection, embed them all in one blocking
+adapter call, then write every vector row in one transaction. During that time
+the terminal is silent — no progress bar, no per-file or per-passage counter,
+not even a per-collection line. Only when the whole run completes does the CLI
+print one line per collection (e.g. `embedded 1,234 passage(s)`). At PRD scale
+(5,000 documents, 100–300 page files, CPU inference via fastembed/ONNX) a
+single collection rebuild can take many minutes with no way for the user to
+tell whether the tool is working, stuck, or nearly done.
+
+### Impact
+
+- The user cannot distinguish "still embedding" from "hung", cannot estimate
+  remaining time, and has no safe checkpointing signal to interrupt a long run.
+- The `EmbedOutcome::Failed` path reports collection-level failures only after
+  the whole batch, so a mid-run failure wastes the entire preceding work with
+  no partial feedback.
+- Progress reporting is also relevant to the JSON/agent-harness callers
+  (PRD-001 §3): today there is no machine-readable way to observe ingestion
+  progress either.
+
+### Open questions (owner decision required)
+
+1. Should the embedding pipeline expose progress (e.g. a per-collection
+   progress callback from the use case, batched embedding with `per-file` or
+   `per-batch` granularity) rendered as a stderr progress bar in the CLI?
+2. Should progress be opt-in for machines (only stderr, disabled when
+   `--json`-style output is used), or always on stderr?
+3. Is per-file granularity meaningful, or is per-batch (N passages) sufficient
+   given passages are loaded before embedding starts?
+
+### Candidate epic direction
+
+"Ingestion progress reporting" — add a progress callback to the embed use
+case, batch the adapter embedding calls, render an stderr progress bar
+(current file/passage vs. total, per collection), keep stdout output
+unchanged, and cover the callback contract with unit tests.
+
+---
+
 ## Provisional Epic Mapping (for v0.2.0 planning)
 
 | OBS | Candidate epic (working title) | Kind | Suggested scope for v0.2.0 |
@@ -718,6 +910,9 @@ execution for future compatibility.
 | OBS-011 | SQLite connection PRAGMAs and concurrency configuration | Scalability / performance | Candidate; pair with OBS-008 and OBS-005 |
 | OBS-012 | Evaluation fixture expansion (100–300 query suite per ADR-004) | Maintainability / DRY | Parkable / follow-up release |
 | OBS-013 | GraphQL query layer cleanup | Maintainability / DRY | Low priority / cleanup |
+| OBS-014 | Model cache placement (`--download` target inside `.mdsearch`) | Behavior inconsistency | `PROMOTED` to EPIC-011 (US-017) |
+| OBS-015 | Reliable "downloaded" detection (no false "pass --download" advice) | Robustness / correctness | `PROMOTED` — folded into EPIC-011 (US-017) |
+| OBS-016 | Ingestion progress reporting (stderr progress bar / file counter) | Scalability / performance | Candidate; UX at PRD scale |
 
 ## Decisions Still Open
 

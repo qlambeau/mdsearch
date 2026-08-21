@@ -303,6 +303,12 @@ Without a cached model and `--download`, embedding fails with a clear message:
 embedding model all-MiniLM-L6-v2 is not available locally; pass --download to fetch it
 ```
 
+Model assets fetched with `--download` are stored under
+`~/.mdsearch/models` by default (see
+[Models and external services](#models-and-external-services)); a model counts
+as downloaded once its completion marker exists there, regardless of the
+working directory you run `mdsearch` from.
+
 Embedding is skipped for collections with no files or no lexical index, and
 skipped when the index is already current for the file set.
 
@@ -505,7 +511,15 @@ Scalar or inline list values are supported (e.g. `tags: rust` or
 - Embedding (`embed`, `hybrid`) uses `fastembed` locally. The default model is
   `all-MiniLM-L6-v2`. Model assets are downloaded with `--download` and then
   cached locally; all later runs are offline.
-- A cross-encoder re-ranker can be selected with `--reranker NAME` for `hybrid`.
+- Downloaded assets live in the model cache directory, resolved per run as:
+  `HF_HOME`, then `FASTEMBED_CACHE_DIR`, then `~/.mdsearch/models`. A model is
+  considered downloaded when its completion marker exists in that directory,
+  so `embed`/`hybrid` never re-download (or advise re-downloading) a model
+  that is already present. Legacy downloads in an old working-directory
+  `.fastembed_cache` are not reused; they are fetched once into the new
+  location.
+- A cross-encoder re-ranker can be selected with `--reranker NAME` for `hybrid`;
+  its assets follow the same cache location and marker rules.
 - Everything else (`search`, `get`, `graph`, `context`, index/collection
   lifecycle) requires no models and no network.
 
