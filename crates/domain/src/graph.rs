@@ -4,7 +4,9 @@
 //! without any LLM or network access. File nodes use the indexing-assigned
 //! stable file ID; tag and alias nodes use their exact normalized name. Edges
 //! are typed and directional and drawn from frontmatter fields (`tags:`,
-//! `aliases:`, `related:`, `sources:`) and inline relative `.md` links.
+//! `aliases:`, `related:`, `sources:`), inline relative `.md` links, and
+//! Obsidian-style wikilinks (`[[target]]`, `[[target|label]]`,
+//! `[[path/target#heading]]`).
 
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
@@ -355,9 +357,33 @@ pub fn extract_graph(files: &[GraphSource<'_>]) -> EntityGraph {
                 ));
             }
         }
+
+        // Wikilinks -> LINKS_TO edges (skip unresolved, ambiguous, self-edges).
+        insert_wikilink_edges(&mut graph, file, &known_paths);
     }
 
     graph
+}
+
+/// Inserts `LINKS_TO` edges for a file's wikilinks, skipping unresolved,
+/// ambiguous, and self-referential targets.
+fn insert_wikilink_edges(
+    graph: &mut EntityGraph,
+    file: &GraphSource<'_>,
+    known_paths: &HashSet<String>,
+) {
+    for target in inline_wikilinks(file.content()) {
+        if let Some(resolved) = resolve_wikilink(&target, file.path(), known_paths) {
+            if resolved == file.path().to_string_lossy() {
+                continue;
+            }
+            graph.insert_edge(GraphEdge::new(
+                NodeId::new(EntityKind::File, file.path().to_string_lossy().into_owned()),
+                NodeId::new(EntityKind::File, resolved),
+                RelationKind::LinksTo,
+            ));
+        }
+    }
 }
 
 /// Normalizes a tag or alias name to its canonical key.
@@ -481,6 +507,109 @@ fn reference_candidates(reference: &str, source_path: &Path) -> Vec<String> {
         candidates.push(joined.to_string_lossy().into_owned());
     }
     candidates
+}
+
+/// Extracts wikilink path targets from markdown `content`.
+///
+/// Recognizes `[[target]]`, `[[target|label]]`, `[[path/target#heading]]`, and
+/// `[[target#heading|label]]`: the piped label and the header fragment are
+/// stripped, and bare self-anchors (`[[#heading]]`), empty targets, and
+/// `http(s)` targets are dropped. A wikilink is closed by the first `]]`
+/// (ADR-014).
+fn inline_wikilinks(content: &[u8]) -> Vec<String> {
+    let text = String::from_utf8_lossy(content);
+    let mut targets = Vec::new();
+    let bytes = text.as_bytes();
+    let mut index = 0;
+
+    while let Some(pos) = find_subslice(bytes, b"[[", index) {
+        let after = pos + 2;
+        let Some(rest) = bytes.get(after..) else {
+            break;
+        };
+        let Some(relative) = find_subslice(rest, b"]]", 0) else {
+            break;
+        };
+        let end = after + relative;
+        let raw = text.get(after..end).unwrap_or_default();
+        let without_label = raw.split_once('|').map_or(raw, |(path, _)| path);
+        let without_fragment = without_label
+            .split_once('#')
+            .map_or(without_label, |(path, _)| path);
+        let target = without_fragment.trim();
+        if !target.is_empty() && !target.starts_with("http://") && !target.starts_with("https://") {
+            targets.push(target.to_owned());
+        }
+        index = end + 2;
+    }
+
+    targets
+}
+
+/// Resolves a wikilink target to a known file path within the collection.
+///
+/// Resolution mirrors [`resolve_file`]'s candidate strategy (target as-is,
+/// joined onto the source file's directory, `.md`-appended variants, then a
+/// basename match) but matches known paths case-insensitively, Obsidian-style.
+/// A candidate with more than one case-insensitive match is ambiguous and
+/// skipped; unresolved targets yield `None` (ADR-014).
+fn resolve_wikilink(target: &str, source_path: &Path, known: &HashSet<String>) -> Option<String> {
+    let target = target.trim();
+    if target.is_empty() || target.starts_with("http://") || target.starts_with("https://") {
+        return None;
+    }
+
+    let mut candidates = reference_candidates(target, source_path);
+    if !has_markdown_extension(target) {
+        let appended = format!("{target}.md");
+        candidates.push(appended.clone());
+        if let Some(parent) = source_path.parent() {
+            candidates.push(parent.join(&appended).to_string_lossy().into_owned());
+        }
+    }
+
+    for candidate in &candidates {
+        if let Some(resolved) = exact_case_insensitive(candidate, known) {
+            return Some(resolved);
+        }
+    }
+
+    let mut basenames = vec![Path::new(target).to_path_buf()];
+    if !has_markdown_extension(target) {
+        basenames.push(Path::new(&format!("{target}.md")).to_path_buf());
+    }
+    for basename in basenames {
+        if let Some(basename) = basename.file_name() {
+            let basename = basename.to_string_lossy();
+            let mut matches = known.iter().filter(|path| {
+                Path::new(path)
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case(&basename))
+            });
+            let Some(first) = matches.next() else {
+                continue;
+            };
+            if matches.next().is_some() {
+                continue;
+            }
+            return Some(first.clone());
+        }
+    }
+
+    None
+}
+
+/// Returns the single known path equal to `candidate` ignoring ASCII case, or
+/// `None` when none or more than one match exists.
+fn exact_case_insensitive(candidate: &str, known: &HashSet<String>) -> Option<String> {
+    let mut matches = known
+        .iter()
+        .filter(|path| path.eq_ignore_ascii_case(candidate));
+    let first = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    Some(first.clone())
 }
 
 /// Extracts inline relative `.md` link targets from markdown `content`.
@@ -689,6 +818,107 @@ mod tests {
             .filter(|e| e.relation() == RelationKind::TaggedWith)
             .count();
         assert_eq!(tagged, 1);
+
+        Ok(())
+    }
+
+    /// Covers: REQ-019 FR-001/FR-002/FR-003 — wikilink forms produce
+    /// `LINKS_TO` edges; labels are ignored; fragments are stripped.
+    #[test]
+    fn wikilink_forms_produce_links_to_edges() -> Result<(), Box<dyn std::error::Error>> {
+        let files = [
+            source(
+                1,
+                "a.md",
+                "[[borrowing]] [[notes/borrowing|Borrowing Rules]] [[borrowing#Lifetimes]] [[borrowing#Lifetimes|L]]\n",
+            )?,
+            source(2, "borrowing.md", "body\n")?,
+            source(3, "notes/borrowing.md", "body\n")?,
+        ];
+        let graph = extract_graph(&files);
+
+        assert!(edge(&graph, "a.md", RelationKind::LinksTo, "borrowing.md"));
+        assert!(edge(
+            &graph,
+            "a.md",
+            RelationKind::LinksTo,
+            "notes/borrowing.md"
+        ));
+        assert!(!node(&graph, EntityKind::Alias, "Borrowing Rules"));
+
+        Ok(())
+    }
+
+    /// Covers: REQ-019 FR-003/FR-009 — wikilink extraction strips labels and
+    /// fragments and drops empty, self-anchor, and http targets.
+    #[test]
+    fn wikilink_extraction_strips_and_filters() {
+        let content = "[[a]] [[b|c]] [[d#e]] [[f#g|h]] [[#x]] [[]] [[http://x]] [[https://y]]";
+
+        assert_eq!(
+            inline_wikilinks(content.as_bytes()),
+            vec!["a", "b", "d", "f"]
+        );
+    }
+
+    /// Covers: REQ-019 FR-005 — wikilink resolution is case-insensitive.
+    #[test]
+    fn wikilink_resolution_is_case_insensitive() {
+        let known = HashSet::from(["note.md".to_owned()]);
+
+        assert_eq!(
+            resolve_wikilink("Note", Path::new("a.md"), &known),
+            Some("note.md".to_owned())
+        );
+    }
+
+    /// Covers: REQ-019 FR-005 — an ambiguous case-only match is skipped.
+    #[test]
+    fn ambiguous_case_only_match_is_skipped() {
+        let known = HashSet::from(["Note.md".to_owned(), "note.md".to_owned()]);
+
+        assert_eq!(resolve_wikilink("Note", Path::new("a.md"), &known), None);
+    }
+
+    /// Covers: REQ-019 FR-006 — an unresolved wikilink produces no edge.
+    #[test]
+    fn unresolved_wikilink_produces_no_edge() -> Result<(), Box<dyn std::error::Error>> {
+        let files = [source(1, "a.md", "[[missing]]\n")?];
+        let graph = extract_graph(&files);
+
+        assert_eq!(graph.edge_count(), 0);
+
+        Ok(())
+    }
+
+    /// Covers: REQ-019 FR-004/FR-007 — self-anchors and self-links produce no
+    /// edges while links from other files still resolve.
+    #[test]
+    fn self_wikilinks_produce_no_edges() -> Result<(), Box<dyn std::error::Error>> {
+        let files = [
+            source(1, "note.md", "[[note]] [[#Overview]]\n")?,
+            source(2, "a.md", "[[note]]\n")?,
+        ];
+        let graph = extract_graph(&files);
+
+        assert!(!edge(&graph, "note.md", RelationKind::LinksTo, "note.md"));
+        assert!(edge(&graph, "a.md", RelationKind::LinksTo, "note.md"));
+
+        Ok(())
+    }
+
+    /// Covers: REQ-019 FR-008 — markdown links and wikilinks coexist.
+    #[test]
+    fn markdown_links_and_wikilinks_coexist() -> Result<(), Box<dyn std::error::Error>> {
+        let files = [
+            source(1, "a.md", "[label](target.md) [[other]]\n")?,
+            source(2, "target.md", "body\n")?,
+            source(3, "other.md", "body\n")?,
+        ];
+        let graph = extract_graph(&files);
+
+        assert!(edge(&graph, "a.md", RelationKind::LinksTo, "target.md"));
+        assert!(edge(&graph, "a.md", RelationKind::LinksTo, "other.md"));
 
         Ok(())
     }

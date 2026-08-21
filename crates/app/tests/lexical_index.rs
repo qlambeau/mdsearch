@@ -7,6 +7,9 @@ use std::path::Path;
 use tempfile::tempdir;
 
 use kv_app::run;
+use kv_application::SemanticIndexStore;
+use kv_domain::{CollectionName, Embedding, EmbeddingModel, SemanticPassage, Timestamp};
+use kv_store_sqlite::SqliteSemanticIndexStore;
 
 fn path_argument(path: &Path) -> Result<&str, std::io::Error> {
     path.to_str()
@@ -25,6 +28,27 @@ fn create_and_add(home: &Path, file: &Path, content: &str) -> Result<(), Box<dyn
             path_argument(file)?,
         ],
         home,
+    )?;
+    Ok(())
+}
+
+/// Builds a semantic index for "Notes" with fake vectors at `dimension`.
+fn embed_with_dimension(home: &Path, dimension: usize) -> Result<(), Box<dyn Error>> {
+    let database_path = home.join(".mdsearch").join("collections.db");
+    let notes = CollectionName::try_from("Notes")?;
+    let mut store = SqliteSemanticIndexStore::open_for_embedding(&database_path)?;
+    store.ensure_dimension(dimension)?;
+    let passages = store.passages(&notes)?;
+    let pairs = passages
+        .iter()
+        .cloned()
+        .map(|passage| (passage, Embedding::new(vec![0.1; dimension])))
+        .collect::<Vec<(SemanticPassage, Embedding)>>();
+    store.rebuild(
+        &notes,
+        &EmbeddingModel::try_new("bge-large-en-v1.5")?,
+        Timestamp::from_unix_seconds(1_700_000_000),
+        &pairs,
     )?;
     Ok(())
 }
@@ -343,6 +367,67 @@ fn update_all_rebuilds_the_index_for_every_collection() -> Result<(), Box<dyn Er
         lines
             .iter()
             .any(|line| line.contains("\"Notes\": lexical index built, 1 file(s), 1 passage(s)")),
+        "unexpected status: {output}"
+    );
+
+    Ok(())
+}
+
+/// Covers: REQ-006 FR-017 — index status reports the recorded semantic model
+/// and dimension for an embedded collection.
+#[test]
+fn index_status_reports_the_semantic_model_and_dimension() -> Result<(), Box<dyn Error>> {
+    let home = tempdir()?;
+    let file = home.path().join("a.md");
+    create_and_add(home.path(), &file, "one\n\ntwo")?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "update",
+            "Notes",
+            path_argument(&file)?,
+        ],
+        home.path(),
+    )?;
+    embed_with_dimension(home.path(), 1024)?;
+
+    let output = run(["mdsearch", "index", "status"], home.path())?;
+
+    assert!(
+        output.contains("bge-large-en-v1.5 (1024 dimensions)"),
+        "unexpected status: {output}"
+    );
+
+    Ok(())
+}
+
+/// Covers: REQ-006 FR-017 — index status reports nothing extra for a
+/// collection without a semantic state row.
+#[test]
+fn index_status_reports_no_semantic_line_without_a_semantic_state() -> Result<(), Box<dyn Error>> {
+    let home = tempdir()?;
+    let file = home.path().join("a.md");
+    create_and_add(home.path(), &file, "one")?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "update",
+            "Notes",
+            path_argument(&file)?,
+        ],
+        home.path(),
+    )?;
+
+    let output = run(["mdsearch", "index", "status"], home.path())?;
+
+    assert!(
+        !output.contains("dimensions"),
+        "unexpected status: {output}"
+    );
+    assert!(
+        output.contains("lexical index built"),
         "unexpected status: {output}"
     );
 

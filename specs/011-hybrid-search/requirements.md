@@ -86,6 +86,7 @@ EPIC-004.
 | FR-016 | `mdsearch hybrid` against a missing database shall fail semantically without creating a database file. | Must | US-011; Report a missing database without creating a file |
 | FR-017 | The re-ranker model shall be provisioned through `mdsearch embed --reranker NAME --download`, which fetches its assets into the local cache and records a global re-ranker model setting; the re-ranker shall not store vectors. | Must | US-011; Re-ranker provisioning via embed |
 | FR-018 | `--database PATH` shall select the database used by `mdsearch hybrid`. | Must | US-011; Report a missing database without creating a file |
+| FR-019 | Before the semantic leg runs, the command shall validate each in-scope collection's recorded dimension (`semantic_index_state.dimension`, legacy NULL read as 384) against the active `embedding_dimension` setting; a disagreement shall fail the command with a clear dimension-mismatch error and no partial results. | Must | US-015; A dimension mismatch on the semantic leg reports a clear error |
 
 ## Postconditions And Invariants
 
@@ -113,6 +114,7 @@ EPIC-004.
 | In-scope semantic index stale | Fail before returning results | Error directing the user to run `mdsearch embed` |
 | `--collection` targets an unknown collection | Fail | Error that the collection was not found |
 | `--collection` targets a collection with an unbuilt lexical index | Fail | Error that the index is not built |
+| A recorded dimension disagrees with the active dimension | Fail before returning results | Clear dimension-mismatch error; no partial results |
 | Unbuilt lexical index or empty collection in all-mode | Skip silently | No contribution |
 | No passage matches | Empty output | No output |
 | The database does not exist | Fail without creating a file | Output communicates the database does not exist |

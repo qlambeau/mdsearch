@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS semantic_index_state (
     collection_id INTEGER PRIMARY KEY REFERENCES collections(collection_id) ON DELETE CASCADE,
     file_set_fingerprint TEXT NOT NULL,
     model TEXT NOT NULL,
+    dimension INTEGER,
     passage_count INTEGER NOT NULL,
     embedded_at INTEGER NOT NULL
 );
@@ -49,6 +50,7 @@ CREATE TABLE IF NOT EXISTS semantic_index_state (
 | `collection_id` | `INTEGER` | No | Yes | None | Foreign key to `collections.collection_id`; cascades on collection destroy. |
 | `file_set_fingerprint` | `TEXT` | No | No | None | Hash of the stored file set (paths and content hashes) the vectors were built from. |
 | `model` | `TEXT` | No | No | None | Embedding model the vectors were generated with. |
+| `dimension` | `INTEGER` | Yes | No | None | Output dimension of the embedding model the vectors were generated with; NULL on legacy rows (pre-schema-version 7), read as 384. |
 | `passage_count` | `INTEGER` | No | No | None | Number of passages embedded for the collection. |
 | `embedded_at` | `INTEGER` | No | No | None | Unix timestamp of the last successful embed. |
 
@@ -70,6 +72,9 @@ CREATE TABLE IF NOT EXISTS semantic_index_state (
 - `model` matches the global `embed_model` setting at the last successful embed;
   a `--model` switch changes both the global setting and this column for every
   rebuilt collection.
+- `dimension` equals the model's documented output dimension at the last
+  successful embed and matches the `embedding_dimension` settings key; NULL
+  rows are legacy (schema version < 7) and are read as 384.
 
 ## Related Tables
 

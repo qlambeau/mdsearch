@@ -23,6 +23,8 @@ use crate::cli::{
     Cli, CollectionCommand, Command, GraphCommand, HybridArgs, IndexCommand, SearchArgs,
 };
 use crate::graph_query::{build_schema, handle};
+use crate::model_cache;
+use crate::progress;
 use crate::related::{RelatedFile, related_files};
 
 /// Executes one `mdsearch` CLI invocation with an injected home directory.
@@ -307,8 +309,9 @@ fn hybrid(args: &HybridArgs, home_directory: &Path) -> Result<String, AppError> 
         .database
         .clone()
         .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
-    let generator = FastembedGenerator::new(None);
-    let reranker = FastembedReranker::new(None);
+    let cache_dir = model_cache::model_cache_dir(home_directory);
+    let generator = FastembedGenerator::new(cache_dir.clone());
+    let reranker = FastembedReranker::new(cache_dir);
     let store = SqliteHybridSearchStore::open(&database_path)?;
     let use_case = HybridSearch::new(generator, store, reranker);
 
@@ -690,8 +693,9 @@ fn embed(
 ) -> Result<String, AppError> {
     let database_path = database_override
         .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
-    let generator = FastembedGenerator::new(None);
-    let reranker = FastembedReranker::new(None);
+    let cache_dir = model_cache::model_cache_dir(home_directory);
+    let generator = FastembedGenerator::new(cache_dir.clone());
+    let reranker = FastembedReranker::new(cache_dir);
     let store = SqliteSemanticIndexStore::open_for_embedding(&database_path)?;
     let mut use_case = EmbedCollections::new(generator, store, SystemClock, reranker);
 
@@ -703,7 +707,17 @@ fn embed(
         None => EmbedScope::All,
     };
 
-    let report = use_case.execute(scope, model.as_ref(), reranker.as_ref(), download)?;
+    let mut progress_view = progress::ProgressRenderer::default();
+    let report = use_case.execute(
+        scope,
+        model.as_ref(),
+        reranker.as_ref(),
+        download,
+        &mut |event| {
+            progress_view.handle(event);
+        },
+    )?;
+    progress_view.finish();
 
     let rendered = render_embed_report(&report);
     if report.any_failed() {
@@ -749,9 +763,19 @@ fn render_embed_outcome(outcome: &EmbedOutcome) -> String {
 }
 
 fn render_index_status(status: &IndexStatus) -> String {
+    let semantic = status
+        .semantic()
+        .map(|line| {
+            format!(
+                ", embedded with {} ({} dimensions)",
+                line.model().as_str(),
+                line.dimension()
+            )
+        })
+        .unwrap_or_default();
     match (status.state(), status.built_at()) {
         (IndexState::Built, Some(timestamp)) => format!(
-            "collection \"{}\": lexical index built, {} file(s), {} passage(s), built at {}",
+            "collection \"{}\": lexical index built, {} file(s), {} passage(s), built at {}{semantic}",
             status.collection().display_name(),
             status.file_count(),
             status.passage_count(),

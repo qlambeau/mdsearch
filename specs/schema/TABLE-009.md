@@ -35,7 +35,7 @@ hybrid search join semantic results back to the lexical `passage_files` rows.
 
 ```sql
 CREATE VIRTUAL TABLE embeddings USING vector(
-    dim=384,
+    dim=<active model dimension>,
     type=float4,
     metric=cosine,
     metadata='collection_id INTEGER, file_id INTEGER, kind TEXT, position INTEGER'
@@ -47,7 +47,7 @@ CREATE VIRTUAL TABLE embeddings USING vector(
 | Column | Data Type | Nullable | Primary Key | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `rowid` | `INTEGER` | No | Yes | None | The vector table row identifier assigned by the extension. |
-| `vector` | `BLOB` | No | No | None | The embedded vector (384 float4 elements), cosine-normalized. |
+| `vector` | `BLOB` | No | No | None | The embedded vector (float4 elements), cosine-normalized. |
 | `collection_id` | `INTEGER` | No | No | None | Metadata column; owning collection, enabling per-collection rebuild and later filtering. |
 | `file_id` | `INTEGER` | No | No | None | Metadata column; the owning file in `files`. |
 | `kind` | `TEXT` | No | No | None | Metadata column; passage kind (`body`, `title`, `tags`, `aliases`, or `summary`). |
@@ -67,8 +67,12 @@ CREATE VIRTUAL TABLE embeddings USING vector(
 - `collection_id`, `file_id`, `kind`, and `position` match the corresponding
   `passage_files` row for the same passage, so semantic results can be joined
   back to lexical passages and files.
-- The vector dimension matches the embedding model's output (384 for
-  `all-MiniLM-L6-v2`); the adapter asserts the dimension before insert.
+- The vector dimension equals the embedding model's output dimension at the
+  last table recreation; the adapter asserts the dimension before insert.
+- The table's dimension equals the `embedding_dimension` settings key and every
+  `semantic_index_state.dimension` value (legacy NULL read as 384); the table
+  is recreated at the active model's dimension when the dimension changes
+  (EPIC-009, ADR-010).
 - Rebuilding a collection deletes all of its rows (`DELETE ... WHERE
   collection_id = ?`) and reinserts the current passage vectors in one
   transaction with the `semantic_index_state` update.

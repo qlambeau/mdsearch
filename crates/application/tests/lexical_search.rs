@@ -1,7 +1,9 @@
 //! Acceptance tests for the lexical-search application use case.
 
+use std::cell::RefCell;
 use std::error::Error;
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use kv_application::{
     LexicalSearchStore, Position, SearchError, SearchLexical, SearchResult, SearchResultSet,
@@ -13,9 +15,14 @@ use kv_domain::{CollectionName, PassageKind};
 struct InMemorySearchStore {
     result_set: Option<SearchResultSet>,
     fail_not_found: bool,
+    recorded_queries: Rc<RefCell<Vec<String>>>,
 }
 
 impl InMemorySearchStore {
+    fn recorder() -> Rc<RefCell<Vec<String>>> {
+        Rc::new(RefCell::new(Vec::new()))
+    }
+
     fn set_results(&mut self, set: SearchResultSet) {
         self.result_set = Some(set);
     }
@@ -24,10 +31,11 @@ impl InMemorySearchStore {
 impl LexicalSearchStore for InMemorySearchStore {
     fn search(
         &self,
-        _query: &str,
+        query: &str,
         _limit: usize,
         _scope: SearchScope<'_>,
     ) -> Result<SearchResultSet, SearchStoreError> {
+        self.recorded_queries.borrow_mut().push(query.to_owned());
         if self.fail_not_found {
             return Err(SearchStoreError::CollectionNotFound);
         }
@@ -133,6 +141,49 @@ fn rejects_an_empty_query() {
         use_case.execute("   ", 10, SearchScope::All),
         Err(SearchError::EmptyQuery)
     ));
+}
+
+/// Covers: REQ-014 FR-001 — an operator-character query reaches the store as
+/// the neutralized expression, so both commands interpret the same free text
+/// identically.
+#[test]
+fn forwards_the_neutralized_expression_to_the_store() -> Result<(), Box<dyn Error>> {
+    let recorded = InMemorySearchStore::recorder();
+    let mut store = InMemorySearchStore {
+        recorded_queries: recorded.clone(),
+        ..InMemorySearchStore::default()
+    };
+    store.set_results(SearchResultSet::new(Vec::new(), 0));
+    let use_case = SearchLexical::new(store);
+
+    use_case.execute("a AND b", 10, SearchScope::All)?;
+
+    assert_eq!(
+        recorded.borrow().as_slice(),
+        &["\"a\" AND \"AND\" AND \"b\""]
+    );
+    Ok(())
+}
+
+/// Covers: REQ-014 FR-002 — FTS5 operator characters are treated as literal
+/// text by the shared mapping, never as syntax.
+#[test]
+fn neutralizes_operator_characters_in_the_query() -> Result<(), Box<dyn Error>> {
+    let recorded = InMemorySearchStore::recorder();
+    let mut store = InMemorySearchStore {
+        recorded_queries: recorded.clone(),
+        ..InMemorySearchStore::default()
+    };
+    store.set_results(SearchResultSet::new(Vec::new(), 0));
+    let use_case = SearchLexical::new(store);
+
+    use_case.execute("prefix* OR \"x\"", 10, SearchScope::All)?;
+
+    assert_eq!(
+        recorded.borrow().as_slice(),
+        &["\"prefix*\" AND \"OR\" AND \"\"\"x\"\"\""]
+    );
+    Ok(())
 }
 
 /// Covers: FR-008 — store errors propagate.

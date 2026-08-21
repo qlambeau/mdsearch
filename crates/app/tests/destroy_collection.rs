@@ -1,6 +1,7 @@
 //! Acceptance tests for the `mdsearch collection destroy` command.
 
 use std::error::Error;
+use std::path::Path;
 use std::process::Command;
 
 use rstest::rstest;
@@ -100,6 +101,124 @@ fn fails_for_a_missing_database_without_creating_it() -> Result<(), Box<dyn Erro
     assert!(error.to_string().contains("does not exist"));
     assert!(!database_path.exists());
 
+    Ok(())
+}
+
+/// Covers: REQ-016 FR-005 — a recreated collection never surfaces stale
+/// passages or graph rows from a destroyed collection.
+#[test]
+fn recreating_a_collection_surfaces_no_stale_data() -> Result<(), Box<dyn Error>> {
+    let home = tempdir()?;
+    let database_path = home.path().join("custom.db");
+    let database_argument = database_path
+        .to_str()
+        .ok_or_else(|| std::io::Error::other("the test path should be UTF-8"))?;
+    let first = home.path().join("first.md");
+    let second = home.path().join("second.md");
+    let first_argument = first
+        .to_str()
+        .ok_or_else(|| std::io::Error::other("the test path should be UTF-8"))?;
+    let second_argument = second
+        .to_str()
+        .ok_or_else(|| std::io::Error::other("the test path should be UTF-8"))?;
+
+    build_collection(
+        home.path(),
+        database_argument,
+        "Notes",
+        first_argument,
+        "---\ntags: [rust]\n---\n\nalpha content",
+    )?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "destroy",
+            "Notes",
+            "--database",
+            database_argument,
+        ],
+        home.path(),
+    )?;
+    build_collection(
+        home.path(),
+        database_argument,
+        "Notes",
+        second_argument,
+        "beta content",
+    )?;
+
+    let stale_search = run(
+        [
+            "mdsearch",
+            "search",
+            "alpha",
+            "--database",
+            database_argument,
+        ],
+        home.path(),
+    )?;
+    assert!(
+        stale_search.is_empty(),
+        "stale search output: {stale_search}"
+    );
+
+    let current_search = run(
+        [
+            "mdsearch",
+            "search",
+            "beta",
+            "--database",
+            database_argument,
+        ],
+        home.path(),
+    )?;
+    assert!(current_search.contains("beta content"));
+
+    let status = run(
+        [
+            "mdsearch",
+            "index",
+            "status",
+            "--database",
+            database_argument,
+        ],
+        home.path(),
+    )?;
+    assert!(
+        status.contains("1 file(s), 1 passage(s)"),
+        "unexpected status: {status}"
+    );
+
+    Ok(())
+}
+
+/// Creates a collection, adds and updates one file at `file_argument`.
+fn build_collection(
+    home: &Path,
+    database_argument: &str,
+    collection: &str,
+    file_argument: &str,
+    content: &str,
+) -> Result<(), Box<dyn Error>> {
+    std::fs::write(
+        home.join(
+            Path::new(file_argument)
+                .file_name()
+                .ok_or_else(|| std::io::Error::other("a file name is required"))?,
+        ),
+        content,
+    )?;
+    for command in [
+        vec!["collection", "create", collection],
+        vec!["collection", "add", collection, file_argument],
+        vec!["collection", "update", collection, file_argument],
+    ] {
+        let mut args = vec!["mdsearch"];
+        args.extend(command.iter().copied());
+        args.extend(["--database", database_argument]);
+        run(&args, home)?;
+    }
     Ok(())
 }
 

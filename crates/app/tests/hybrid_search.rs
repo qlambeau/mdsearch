@@ -7,6 +7,9 @@ use std::path::Path;
 use tempfile::tempdir;
 
 use kv_app::run;
+use kv_application::SemanticIndexStore;
+use kv_domain::{CollectionName, Embedding, EmbeddingModel, SemanticPassage, Timestamp};
+use kv_store_sqlite::SqliteSemanticIndexStore;
 
 fn path_argument(path: &Path) -> Result<&str, std::io::Error> {
     path.to_str()
@@ -48,6 +51,27 @@ fn add_and_update(
     Ok(())
 }
 
+/// Builds a semantic index for "Notes" with fake vectors at `dimension`.
+fn embed_with_dimension(home: &Path, dimension: usize) -> Result<(), Box<dyn Error>> {
+    let database_path = home.join(".mdsearch").join("collections.db");
+    let notes = CollectionName::try_from("Notes")?;
+    let mut store = SqliteSemanticIndexStore::open_for_embedding(&database_path)?;
+    store.ensure_dimension(dimension)?;
+    let passages = store.passages(&notes)?;
+    let pairs = passages
+        .iter()
+        .cloned()
+        .map(|passage| (passage, Embedding::new(vec![0.1; dimension])))
+        .collect::<Vec<(SemanticPassage, Embedding)>>();
+    store.rebuild(
+        &notes,
+        &EmbeddingModel::try_new("all-MiniLM-L6-v2")?,
+        Timestamp::from_unix_seconds(1_700_000_000),
+        &pairs,
+    )?;
+    Ok(())
+}
+
 /// Covers: REQ-011 FR-003 — an empty query fails.
 #[test]
 fn hybrid_fails_on_an_empty_query() -> Result<(), Box<dyn Error>> {
@@ -59,6 +83,86 @@ fn hybrid_fails_on_an_empty_query() -> Result<(), Box<dyn Error>> {
 
     assert!(
         error.to_string().contains("query is empty"),
+        "unexpected error: {error}"
+    );
+
+    Ok(())
+}
+
+/// Covers: REQ-014 FR-002 — FTS5 operator characters match literally in the
+/// hybrid lexical leg (offline-reachable without semantic assets).
+#[test]
+fn hybrid_matches_operator_characters_literally() -> Result<(), Box<dyn Error>> {
+    let home = tempdir()?;
+    let a = home.path().join("a.md");
+    let b = home.path().join("b.md");
+    create(home.path(), "Notes")?;
+    add_and_update(home.path(), "Notes", &a, "a AND b semantics")?;
+    add_and_update(home.path(), "Notes", &b, "borrowing only")?;
+
+    let output = run(["mdsearch", "hybrid", "a AND"], home.path())?;
+
+    assert!(
+        output.contains("a AND b semantics"),
+        "unexpected output: {output}"
+    );
+    assert!(
+        !output.contains("borrowing only"),
+        "unexpected output: {output}"
+    );
+
+    Ok(())
+}
+
+/// Covers: REQ-014 FR-004 — the identical query string returns the same
+/// passages on `search` and `hybrid` against the same collection state.
+#[test]
+fn search_and_hybrid_return_the_same_passages_for_the_same_query() -> Result<(), Box<dyn Error>> {
+    let home = tempdir()?;
+    let a = home.path().join("a.md");
+    let b = home.path().join("b.md");
+    create(home.path(), "Notes")?;
+    add_and_update(home.path(), "Notes", &a, "a AND b semantics")?;
+    add_and_update(home.path(), "Notes", &b, "borrowing only")?;
+
+    let search = run(["mdsearch", "search", "a AND"], home.path())?;
+    let hybrid = run(["mdsearch", "hybrid", "a AND"], home.path())?;
+
+    for output in [&search, &hybrid] {
+        assert!(
+            output.contains("a AND b semantics"),
+            "unexpected output: {output}"
+        );
+        assert!(
+            !output.contains("borrowing only"),
+            "unexpected output: {output}"
+        );
+    }
+
+    Ok(())
+}
+
+/// Covers: REQ-011 FR-019 — a recorded dimension disagreeing with the active
+/// dimension fails the hybrid command with a clear dimension-mismatch error.
+#[test]
+fn hybrid_reports_a_dimension_mismatch() -> Result<(), Box<dyn Error>> {
+    let home = tempdir()?;
+    let a = home.path().join("a.md");
+    create(home.path(), "Notes")?;
+    add_and_update(home.path(), "Notes", &a, "borrowing rules")?;
+    embed_with_dimension(home.path(), 384)?;
+
+    let database_path = home.path().join(".mdsearch").join("collections.db");
+    let mut store = SqliteSemanticIndexStore::open_for_embedding(&database_path)?;
+    store.ensure_dimension(1024)?;
+    drop(store);
+
+    let error = run(["mdsearch", "hybrid", "borrowing"], home.path())
+        .err()
+        .ok_or_else(|| std::io::Error::other("a dimension mismatch should fail"))?;
+
+    assert!(
+        error.to_string().contains("dimension mismatch"),
         "unexpected error: {error}"
     );
 

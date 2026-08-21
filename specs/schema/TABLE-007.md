@@ -23,7 +23,9 @@ related:
 
 The `settings` table stores database-wide key/value configuration. It holds the
 single global embedding model (`embed_model`) used by `mdsearch embed`, ensuring
-every collection's vectors are comparable under one model.
+every collection's vectors are comparable under one model, and the active
+vector-table dimension (`embedding_dimension`) of the shared `embeddings`
+virtual table.
 
 ## DDL (Schema Definition)
 
@@ -51,9 +53,13 @@ CREATE TABLE IF NOT EXISTS settings (
 
 - The `embed_model` key, when present, holds the name of the single global
   embedding model.
+- The `embedding_dimension` key, when present, holds the dimension of the
+  shared `embeddings` vector table; its absence means the legacy default of
+  384.
 - The absence of the `embed_model` key means no global model has been recorded
   yet (first `embed` run has not happened or no model was ever set).
-- The value is written only by the embed store; other commands never modify it.
+- The values are written only by the embed store; other commands never modify
+  them.
 
 ## Related Tables
 

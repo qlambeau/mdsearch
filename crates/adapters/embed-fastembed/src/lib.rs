@@ -5,6 +5,7 @@
 //! ports.
 
 mod embedding;
+mod marker;
 mod rerank;
 
 pub use embedding::FastembedGenerator;

@@ -100,3 +100,38 @@ Feature: Deterministic entity graph build and internal query layer
     When I run `mdsearch update`
     Then the update succeeds
     And the graph for "Notes" has file nodes "a.md" and "b.md"
+
+  Scenario: Update extracts wikilinks as LINKS_TO edges
+    Given a collection named "Notes" stores files "a.md" and "b.md"
+    And "a.md" contains a wikilink "[[b]]" to "b.md"
+    When I run `mdsearch update`
+    Then the update succeeds
+    And the graph for "Notes" has a LINKS_TO edge from "a.md" to "b.md"
+
+  Scenario: Update strips wikilink fragments and ignores piped labels
+    Given a collection named "Notes" stores files "a.md" and "b.md"
+    And "a.md" contains a wikilink "[[b#Lifetimes|Borrowing]]" to "b.md"
+    When I run `mdsearch update`
+    Then the update succeeds
+    And the graph for "Notes" has a LINKS_TO edge from "a.md" to "b.md"
+    And no alias node is created for "Borrowing"
+
+  Scenario: Update resolves wikilinks case-insensitively and skips ambiguity
+    Given a collection named "Notes" stores files "a.md" and "b.md"
+    And "a.md" contains a wikilink "[[B]]" to "b.md"
+    When I run `mdsearch update`
+    Then the update succeeds
+    And the graph for "Notes" has a LINKS_TO edge from "a.md" to "b.md"
+    Given a collection named "Notes" additionally stores a file "B.md"
+    And "a.md" contains a wikilink "[[B]]"
+    When I run `mdsearch update`
+    Then the graph for "Notes" has no edge for the ambiguous wikilink "[[B]]"
+
+  Scenario: Update skips unresolved wikilinks and self-links
+    Given a collection named "Notes" stores files "a.md" and "b.md"
+    And "a.md" contains a wikilink "[[missing]]" to an unknown file
+    And "a.md" contains a wikilink "[[a]]" to itself
+    When I run `mdsearch update`
+    Then the update succeeds
+    And the graph for "Notes" has no edge for "[[missing]]"
+    And the graph for "Notes" has no edge from "a.md" to itself

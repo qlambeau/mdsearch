@@ -166,14 +166,20 @@ pub trait LexicalSearchStore {
     /// ranked results ordered by BM25 score (highest first) and the total
     /// number of matching passages.
     ///
+    /// `query` is a neutralized FTS5 expression produced by the domain
+    /// free-text mapper (`free_text_to_fts5`): every term is a quoted phrase
+    /// joined with `AND`, so it is valid FTS5 by construction. Callers must
+    /// not pass raw user free text.
+    ///
     /// For [`SearchScope::All`], collections without a built index are skipped.
     /// For [`SearchScope::Collection`], an unknown collection or a collection
     /// without a built index is an error.
     ///
     /// # Errors
     ///
-    /// Returns a not-found, not-built, invalid-query, or storage error when the
-    /// search cannot complete.
+    /// Returns a not-found, not-built, or storage error when the search cannot
+    /// complete. The invalid-query variant is defense-in-depth and is not
+    /// constructed from normal input (ADR-009).
     fn search(
         &self,
         query: &str,

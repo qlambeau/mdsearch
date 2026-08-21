@@ -5,20 +5,21 @@ use fastembed::{RerankInitOptions, RerankerModel as FastembedRerankerModel, Text
 use kv_application::Reranker;
 use kv_domain::RerankerModel;
 
+use crate::marker;
+
 /// Re-scores candidate documents locally with `fastembed`'s `TextRerank`.
 pub struct FastembedReranker {
     session: RefCell<Option<TextRerank>>,
-    cache_dir: Option<PathBuf>,
+    cache_dir: PathBuf,
 }
 
 impl FastembedReranker {
-    /// Creates a re-ranker that loads models from fastembed's cache.
+    /// Creates a re-ranker that loads models from the given cache directory.
     ///
-    /// When `cache_dir` is `None`, the cache directory is resolved from the
-    /// `HF_HOME`, then `FASTEMBED_CACHE_DIR`, then the default
-    /// `.fastembed_cache` directory, matching fastembed's resolution order.
+    /// The cache directory is resolved once by the caller (ADR-012): the
+    /// re-ranker adapter no longer inspects environment variables.
     #[must_use]
-    pub fn new(cache_dir: Option<PathBuf>) -> Self {
+    pub fn new(cache_dir: PathBuf) -> Self {
         Self {
             session: RefCell::new(None),
             cache_dir,
@@ -33,9 +34,8 @@ impl Reranker for FastembedReranker {
         download: bool,
     ) -> Result<(), kv_application::RerankError> {
         let fastembed_model = resolve_reranker_model(model)?;
-        let cache_dir = self.effective_cache_dir();
 
-        if model_is_cached(&cache_dir, &fastembed_model) {
+        if marker::marker_exists(&self.cache_dir, model.as_str()) {
             return Ok(());
         }
 
@@ -45,7 +45,9 @@ impl Reranker for FastembedReranker {
             });
         }
 
-        let session = build_rerank_session(fastembed_model, &cache_dir)?;
+        let session = build_rerank_session(fastembed_model, &self.cache_dir)?;
+        marker::write_marker(&self.cache_dir, model.as_str())
+            .map_err(|source| kv_application::RerankError::Storage(Box::new(source)))?;
         *self.session.borrow_mut() = Some(session);
 
         Ok(())
@@ -61,13 +63,12 @@ impl Reranker for FastembedReranker {
 
         let mut session = self.session.borrow_mut();
         if session.is_none() {
-            let cache_dir = self.effective_cache_dir();
-            if !model_is_cached(&cache_dir, &fastembed_model) {
+            if !marker::marker_exists(&self.cache_dir, model.as_str()) {
                 return Err(kv_application::RerankError::ModelNotCached {
                     model: model.as_str().to_owned(),
                 });
             }
-            *session = Some(build_rerank_session(fastembed_model, &cache_dir)?);
+            *session = Some(build_rerank_session(fastembed_model, &self.cache_dir)?);
         }
 
         let model = session.as_mut().ok_or_else(|| {
@@ -88,21 +89,6 @@ impl Reranker for FastembedReranker {
         }
 
         Ok(scores)
-    }
-}
-
-impl FastembedReranker {
-    fn effective_cache_dir(&self) -> PathBuf {
-        if let Some(cache_dir) = &self.cache_dir {
-            return cache_dir.clone();
-        }
-        if let Ok(hf_home) = std::env::var("HF_HOME") {
-            return PathBuf::from(hf_home);
-        }
-        if let Ok(cache_dir) = std::env::var("FASTEMBED_CACHE_DIR") {
-            return PathBuf::from(cache_dir);
-        }
-        PathBuf::from(".fastembed_cache")
     }
 }
 
@@ -149,33 +135,16 @@ fn build_rerank_session(
     })
 }
 
-/// Returns whether the model's primary file is present in the local cache.
-///
-/// The check mirrors the hf-hub cache layout fastembed uses, matching the
-/// embedding adapter's availability check.
-fn model_is_cached(cache_dir: &Path, model: &FastembedRerankerModel) -> bool {
-    let info = fastembed::TextRerank::get_model_info(model);
-    let folder = cache_dir.join(info.model_code.replace('/', "--"));
-    let commit_path = folder.join("refs").join("main");
-    let Ok(commit) = std::fs::read_to_string(commit_path) else {
-        return false;
-    };
-    let snapshot = folder.join("snapshots").join(commit.trim());
-    snapshot.join(&info.model_file).exists()
-}
-
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use fastembed::RerankerModel as FastembedRerankerModel;
     use kv_application::Reranker;
     use kv_domain::RerankerModel;
     use tempfile::tempdir;
 
     use super::friendly_reranker_model;
-    use super::model_is_cached;
     use super::resolve_reranker_model;
+    use crate::marker;
 
     /// Covers: REQ-011 — the default friendly name resolves to fastembed.
     #[test]
@@ -208,7 +177,7 @@ mod tests {
     fn uncached_reranker_fails_without_download() -> Result<(), Box<dyn std::error::Error>> {
         let cache_dir = tempdir()?;
         let model = RerankerModel::try_new("bge-reranker-base")?;
-        let reranker = super::FastembedReranker::new(Some(cache_dir.path().to_owned()));
+        let reranker = super::FastembedReranker::new(cache_dir.path().to_owned());
 
         assert!(matches!(
             reranker.ensure_available(&model, false),
@@ -218,43 +187,30 @@ mod tests {
         Ok(())
     }
 
-    /// Covers: DES-011 — the availability check matches the hf-hub cache layout.
+    /// Covers: REQ-017 FR-007 — a completion marker alone makes the re-ranker
+    /// available without any hf-hub layout.
     #[test]
-    fn reranker_availability_check_matches_hf_hub_cache_layout()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn downloaded_reranker_is_recognized_via_marker() -> Result<(), Box<dyn std::error::Error>> {
         let cache_dir = tempdir()?;
-        let info = fastembed::TextRerank::get_model_info(&FastembedRerankerModel::BGERerankerBase);
-        let folder = cache_dir.path().join(info.model_code.replace('/', "--"));
-        let snapshot = folder.join("snapshots").join("abcdef");
-        fs::create_dir_all(&snapshot)?;
-        fs::create_dir_all(folder.join("refs"))?;
-        fs::write(folder.join("refs").join("main"), "abcdef")?;
-        let model_file = snapshot.join(&info.model_file);
-        if let Some(parent) = model_file.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(model_file, b"fake onnx")?;
+        let model = RerankerModel::try_new("bge-reranker-base")?;
+        marker::write_marker(cache_dir.path(), model.as_str())?;
+        let reranker = super::FastembedReranker::new(cache_dir.path().to_owned());
 
-        assert!(model_is_cached(
-            cache_dir.path(),
-            &FastembedRerankerModel::BGERerankerBase
-        ));
+        assert!(reranker.ensure_available(&model, false).is_ok());
 
         Ok(())
     }
 
-    /// Covers: DES-011 — a missing commit pointer means the model is not cached.
+    /// Covers: REQ-017 FR-007 — an existing re-ranker marker avoids
+    /// re-downloading.
     #[test]
-    fn missing_commit_pointer_means_not_cached() -> Result<(), Box<dyn std::error::Error>> {
+    fn existing_reranker_marker_avoids_redownload() -> Result<(), Box<dyn std::error::Error>> {
         let cache_dir = tempdir()?;
-        let info = fastembed::TextRerank::get_model_info(&FastembedRerankerModel::BGERerankerBase);
-        let folder = cache_dir.path().join(info.model_code.replace('/', "--"));
-        fs::create_dir_all(&folder)?;
+        let model = RerankerModel::try_new("bge-reranker-base")?;
+        marker::write_marker(cache_dir.path(), model.as_str())?;
+        let reranker = super::FastembedReranker::new(cache_dir.path().to_owned());
 
-        assert!(!model_is_cached(
-            cache_dir.path(),
-            &FastembedRerankerModel::BGERerankerBase
-        ));
+        assert!(reranker.ensure_available(&model, true).is_ok());
 
         Ok(())
     }

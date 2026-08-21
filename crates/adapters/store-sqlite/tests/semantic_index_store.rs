@@ -60,6 +60,27 @@ fn embedding() -> Embedding {
     Embedding::new(vec![0.1; 384])
 }
 
+fn embedding_of_dimension(dimension: usize) -> Embedding {
+    Embedding::new(vec![0.1; dimension])
+}
+
+/// Reads the dimension declared in the stored `embeddings` table definition.
+fn table_dimension(database_path: &Path) -> Result<i64, Box<dyn Error>> {
+    let connection = Connection::open(database_path)?;
+    let create: String = connection.query_row(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'embeddings'",
+        [],
+        |row| row.get(0),
+    )?;
+    let value = create
+        .split("dim=")
+        .nth(1)
+        .and_then(|rest| rest.split(',').next())
+        .and_then(|raw| raw.trim().parse::<i64>().ok())
+        .ok_or_else(|| std::io::Error::other(format!("no dim in {create}")))?;
+    Ok(value)
+}
+
 fn build(
     directory: &Path,
     collection: &CollectionName,
@@ -343,6 +364,130 @@ fn rebuild_rejects_a_wrong_dimension_vector() -> Result<(), Box<dyn Error>> {
             .is_err()
     );
     assert!(store.status(&notes)?.is_none());
+
+    Ok(())
+}
+
+/// Covers: REQ-010 FR-024 — the rebuild guard names the expected and actual
+/// dimensions in its error.
+#[test]
+fn rebuild_guard_names_expected_and_actual_dimensions() -> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let notes = name("Notes")?;
+    build(directory.path(), &notes, &[("a.md", "one")])?;
+    let mut store =
+        SqliteSemanticIndexStore::open_for_embedding(&directory.path().join("collections.db"))?;
+
+    let bad = Embedding::new(vec![0.1; 8]);
+    let pairs = vec![(passage(1, PassageKind::Body, 0, "one")?, bad)];
+
+    let error = store
+        .rebuild(&notes, &model("all-MiniLM-L6-v2")?, timestamp(), &pairs)
+        .err()
+        .ok_or_else(|| std::io::Error::other("a wrong-dimension rebuild should fail"))?;
+    let message = match error {
+        kv_application::SemanticIndexStoreError::Storage(inner) => inner.to_string(),
+        other @ kv_application::SemanticIndexStoreError::CollectionNotFound => {
+            return Err(std::io::Error::other(format!("unexpected error: {other:?}")).into());
+        }
+    };
+
+    assert!(
+        message.contains("expected 384"),
+        "unexpected error: {message}"
+    );
+    assert!(message.contains("got 8"), "unexpected error: {message}");
+
+    Ok(())
+}
+
+/// Covers: REQ-015 FR-001/FR-022 — a 1024-dimension rebuild succeeds and
+/// records the batch dimension in the collection state and the active
+/// dimension in settings, with the vector table created at that dimension.
+#[test]
+fn rebuild_stores_the_batch_dimension_and_active_setting() -> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let notes = name("Notes")?;
+    build(directory.path(), &notes, &[("a.md", "one\n\ntwo")])?;
+    let mut store =
+        SqliteSemanticIndexStore::open_for_embedding(&directory.path().join("collections.db"))?;
+    store.ensure_dimension(1024)?;
+
+    let passages = store.passages(&notes)?;
+    let pairs = passages
+        .iter()
+        .cloned()
+        .map(|passage| (passage, embedding_of_dimension(1024)))
+        .collect::<Vec<_>>();
+    let count = store.rebuild(&notes, &model("bge-large-en-v1.5")?, timestamp(), &pairs)?;
+    assert_eq!(count, 2);
+
+    let database_path = directory.path().join("collections.db");
+    let connection = open_with_vector(&database_path)?;
+    let state_dimension: i64 = connection.query_row(
+        "SELECT dimension FROM semantic_index_state
+         WHERE collection_id = (SELECT collection_id FROM collections WHERE name_key = ?1)",
+        [notes.name_key()],
+        |row| row.get(0),
+    )?;
+    assert_eq!(state_dimension, 1024);
+    let setting: String = connection.query_row(
+        "SELECT value FROM settings WHERE key = 'embedding_dimension'",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(setting, "1024");
+    assert_eq!(table_dimension(&database_path)?, 1024);
+
+    Ok(())
+}
+
+/// Covers: REQ-015 FR-003 — rebuilding under a different-dimension model
+/// recreates the vector table at the new dimension and updates the recorded
+/// state.
+#[test]
+fn rebuild_recreates_the_table_when_the_dimension_changes() -> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let notes = name("Notes")?;
+    build(directory.path(), &notes, &[("a.md", "one\n\ntwo")])?;
+    let mut store =
+        SqliteSemanticIndexStore::open_for_embedding(&directory.path().join("collections.db"))?;
+    store.ensure_dimension(1024)?;
+
+    let passages = store.passages(&notes)?;
+    let wide = passages
+        .iter()
+        .cloned()
+        .map(|passage| (passage, embedding_of_dimension(1024)))
+        .collect::<Vec<_>>();
+    store.rebuild(&notes, &model("bge-large-en-v1.5")?, timestamp(), &wide)?;
+
+    store.ensure_dimension(384)?;
+    let narrow = passages
+        .iter()
+        .cloned()
+        .map(|passage| (passage, embedding_of_dimension(384)))
+        .collect::<Vec<_>>();
+    store.rebuild(&notes, &model("all-MiniLM-L6-v2")?, timestamp(), &narrow)?;
+
+    let database_path = directory.path().join("collections.db");
+    let connection = open_with_vector(&database_path)?;
+    let state_dimension: i64 = connection.query_row(
+        "SELECT dimension FROM semantic_index_state
+         WHERE collection_id = (SELECT collection_id FROM collections WHERE name_key = ?1)",
+        [notes.name_key()],
+        |row| row.get(0),
+    )?;
+    assert_eq!(state_dimension, 384);
+    let setting: String = connection.query_row(
+        "SELECT value FROM settings WHERE key = 'embedding_dimension'",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(setting, "384");
+    assert_eq!(table_dimension(&database_path)?, 384);
+    let vector_count = vector_count(&database_path, "Notes")?;
+    assert_eq!(vector_count, 2);
 
     Ok(())
 }

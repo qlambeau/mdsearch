@@ -19,7 +19,9 @@ mod update_collection;
 pub use add_files::{AddFiles, AddFilesOutcome};
 pub use create_collection::CreateCollection;
 pub use destroy_collection::DestroyCollection;
-pub use embed_collections::{EmbedCollections, EmbedOutcome, EmbedReport, EmbedScope, SkipReason};
+pub use embed_collections::{
+    EmbedCollections, EmbedOutcome, EmbedProgress, EmbedReport, EmbedScope, SkipReason,
+};
 pub use error::{
     AddFilesError, ClockError, CollectionStoreError, CreateCollectionError, DestroyCollectionError,
     EmbedError, EmbeddingError, FileRetrievalStoreError, FileStoreError, FileSystemError,
@@ -37,6 +39,6 @@ pub use ports::{
     FileStore, FileSystem, GraphStore, HybridCandidate, HybridCandidates, HybridSearchStore,
     InMemoryGraphStore, IndexState, IndexStatus, LexicalIndexStore, LexicalSearchStore, Neighbor,
     Position, ReconcileOutcome, Reranker, RetrievedFile, SearchResult, SearchResultSet,
-    SearchScope, SemanticIndexStore, StoredFile, traverse_graph,
+    SearchScope, SemanticIndexStore, SemanticStatus, StoredFile, traverse_graph,
 };
 pub use update_collection::{UpdateCollection, UpdateOutcome, UpdateTarget};

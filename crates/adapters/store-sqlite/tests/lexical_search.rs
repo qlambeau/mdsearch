@@ -256,9 +256,41 @@ fn matches_an_exact_phrase() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Covers: FR-006 — a malformed query fails with an invalid-query error.
+/// Covers: REQ-014 FR-002 — a neutralized operator-character expression
+/// matches literally: every term (including operator words) must be present.
 #[test]
-fn reports_a_malformed_query() -> Result<(), Box<dyn Error>> {
+fn matches_neutralized_operator_characters_literally() -> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let notes = name("Notes")?;
+    build(
+        directory.path(),
+        &notes,
+        &[("a.md", "a AND b semantics"), ("b.md", "borrowing only")],
+    )?;
+
+    let store = SqliteLexicalSearchStore::open(&directory.path().join("collections.db"))?;
+    let set = store.search("\"a\" AND \"AND\" AND \"b\"", 10, SearchScope::All)?;
+
+    assert_eq!(set.total(), 1);
+    let single = set
+        .results()
+        .first()
+        .ok_or_else(|| std::io::Error::other("expected one result"))?;
+    assert!(single.path().ends_with("a.md"));
+    assert!(
+        set.results()
+            .iter()
+            .all(|result| !result.path().ends_with("b.md"))
+    );
+
+    Ok(())
+}
+
+/// Covers: REQ-014 FR-006 — a raw malformed expression is never classified as
+/// an invalid query by message-text matching; it maps deterministically to a
+/// storage error (defense-in-depth means `InvalidQuery` is not constructed).
+#[test]
+fn maps_execution_failures_to_storage_without_query_classification() -> Result<(), Box<dyn Error>> {
     let directory = tempdir()?;
     let notes = name("Notes")?;
     build(directory.path(), &notes, &[("a.md", "borrowing")])?;
@@ -267,9 +299,9 @@ fn reports_a_malformed_query() -> Result<(), Box<dyn Error>> {
     let error = store
         .search("a AND", 10, SearchScope::All)
         .err()
-        .ok_or_else(|| std::io::Error::other("a malformed query should fail"))?;
+        .ok_or_else(|| std::io::Error::other("a malformed expression should fail"))?;
 
-    assert!(matches!(error, SearchStoreError::InvalidQuery { .. }));
+    assert!(matches!(error, SearchStoreError::Storage(_)), "{error:?}");
 
     Ok(())
 }

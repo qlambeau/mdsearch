@@ -93,16 +93,21 @@ embedding model, and reports per-collection status.
 | FR-019 | With `--reranker NAME`, `embed` shall validate the re-ranker name, ensure its assets are cached locally (fetching them when `--download` is passed), and record a single global re-ranker model in the database. | Must | US-011; Re-ranker provisioning via embed (FR-017 of REQ-011) |
 | FR-020 | The re-ranker provisioning shall not store vectors or modify any collection's semantic index; it only records the `reranker_model` setting. | Must | US-011; Re-ranker provisioning via embed (FR-017 of REQ-011) |
 | FR-021 | An unsupported or uncached `--reranker` value shall fail clearly before any collection work, mirroring the embedding model's validation and download gating. | Must | US-011; Re-ranker provisioning via embed (FR-017 of REQ-011) |
+| FR-022 | Each collection's vectors shall be stored at the output dimension of the model that built them, and the shared `embeddings` vector table shall be created at that dimension; a rebuild whose batch dimension disagrees with the recorded active dimension shall recreate the table at the batch dimension and update the recorded active dimension, transactionally with the collection's rebuild. | Must | US-015; A 1024-dimension model embeds and searches successfully; Rebuilding with a different-dimension model recreates the index |
+| FR-023 | A successful rebuild shall record the embedding model and its output dimension in `semantic_index_state` for the collection. | Must | US-015; Status reports the recorded embedding model and dimension |
+| FR-024 | The rebuild dimension guard shall validate every vector against the active dimension and fail with an error naming the expected and actual dimensions. | Must | US-015; A 1024-dimension model embeds and searches successfully |
 
 ## Postconditions And Invariants
 
 - After a successful embed, every processed collection has a semantic index
   whose vector set corresponds exactly to its lexical passage set at that point.
-- A collection's embed state records the stored file content-hash set and the
-  global model under which the vectors were built.
+- A collection's embed state records the stored file content-hash set, the
+  global model under which the vectors were built, and that model's output
+  dimension.
 - There is exactly one recorded global embedding model in the database; a model
   switch rebuilds every previously embedded collection so no collection retains
-  vectors from a superseded model.
+  vectors from a superseded model, and the shared vector table is recreated at
+  the new model's dimension before those rebuilds.
 - The command operates offline unless `--download` is explicitly passed.
 - The operation does not modify the lexical index, the stored files, or the
   collections. With `--reranker`, it additionally records a single global
@@ -124,6 +129,8 @@ embedding model, and reports per-collection status.
 | Files changed since the last embed | Rebuild the affected collection | Current passage set embedded |
 | No files and no model changed | Do not rebuild | Collection reported as already current |
 | A `--model` value differs from the recorded global model | Switch the global model and rebuild every embedded collection | All previously embedded collections show the new model |
+| A rebuild batch dimension differs from the recorded active dimension | Recreate the vector table at the batch dimension and record it | The new dimension is in effect; every rebuilt collection records it |
+| A vector length disagrees with the active dimension | Fail the rebuild, naming expected and actual dimensions | Clear dimension-mismatch error; the previous vectors and state stay intact |
 | `--reranker` names an unsupported model | Fail before any collection work | Clear error naming the model |
 | `--reranker` model assets not cached locally, no `--download` | Fail before any collection work | Clear error naming the model and suggesting `--download` |
 | `--download` re-ranker fetch failure | Fail cleanly; no collection modified, no setting recorded | Clear fetch-failure error |

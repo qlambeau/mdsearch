@@ -57,3 +57,24 @@ Feature: Destroy a named collection
     And I destroyed "Notes" in an earlier CLI run
     When I run `mdsearch collection list`
     Then the output does not include "Notes"
+
+  Scenario: Destroying a fully indexed collection leaves no trace
+    Given a collection named "Notes" has stored files
+    And "Notes" has a built lexical index, a built semantic index, and graph rows
+    When I run `mdsearch collection destroy Notes`
+    Then the collection "Notes" is removed
+    And no rows for "Notes" remain in the files, passages, embeddings, graph, or index-state tables
+
+  Scenario: Recreating a collection after destroy surfaces no stale data
+    Given "Notes" had stored files, built indexes, and graph rows
+    And "Notes" was destroyed in an earlier run
+    And a new collection named "Notes" was created with fresh files and built indexes
+    When I search, run hybrid, and query the graph for the new "Notes"
+    Then no stale passages, vectors, or graph rows from the destroyed collection appear
+
+  Scenario: A failed destroy leaves the collection intact
+    Given a collection named "Notes" has stored files, built indexes, and graph rows
+    And a storage error occurs while destroying "Notes"
+    When I run `mdsearch collection destroy Notes`
+    Then the operation fails
+    And the collection "Notes" and all of its data remain unchanged
