@@ -15,7 +15,7 @@ use kv_application::{
     FileRetrievalStoreError, FileStore, FileStoreError, IndexStatus, IndexStoreError,
     LexicalIndexStore, LexicalSearchStore, Position, ReconcileOutcome, RetrievedFile, SearchResult,
     SearchResultSet, SearchScope, SearchStoreError, SemanticIndexStore, SemanticIndexStoreError,
-    StoredFile,
+    SemanticStatus, StoredFile,
 };
 use kv_domain::{
     CollectionName, ContentHash, Embedding, EmbeddingModel, EntityGraph, FileId, FrontmatterIssue,
@@ -32,13 +32,13 @@ pub use graph::SqliteGraphStore;
 pub use hybrid::SqliteHybridSearchStore;
 
 /// The current database schema version applied by [`migrate`].
-const CURRENT_SCHEMA_VERSION: i64 = 6;
+const CURRENT_SCHEMA_VERSION: i64 = 7;
 
 /// The schema version at which the lexical index tables exist.
 const INDEX_SCHEMA_VERSION: i64 = 3;
 
-/// The dimension of vectors stored in the `embeddings` table.
-const EMBEDDING_DIMENSION: i64 = 384;
+/// The dimension assumed for databases that predate dimension recording.
+const LEGACY_EMBEDDING_DIMENSION: i64 = 384;
 
 /// Persists collection metadata in one `SQLite` database file.
 pub struct SqliteCollectionStore {
@@ -176,12 +176,6 @@ fn migrate(connection: &Connection) -> Result<(), rusqlite::Error> {
             model TEXT NOT NULL,
             passage_count INTEGER NOT NULL,
             embedded_at INTEGER NOT NULL
-        );
-        CREATE VIRTUAL TABLE IF NOT EXISTS embeddings USING vector(
-            dim=384,
-            type=float4,
-            metric=cosine,
-            metadata=\"collection_id INTEGER, file_id INTEGER, kind TEXT, position INTEGER\"
         );",
     )?;
 
@@ -197,6 +191,12 @@ fn migrate(connection: &Connection) -> Result<(), rusqlite::Error> {
         if version < 4 && !table_has_column(connection, "passage_files", "byte_offset")? {
             connection.execute(
                 "ALTER TABLE passage_files ADD COLUMN byte_offset INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+        if version < 7 && !table_has_column(connection, "semantic_index_state", "dimension")? {
+            connection.execute(
+                "ALTER TABLE semantic_index_state ADD COLUMN dimension INTEGER",
                 [],
             )?;
         }
@@ -749,15 +749,19 @@ impl LexicalIndexStore for SqliteLexicalIndexStore {
             "SELECT c.display_name,
                     COUNT(f.file_id) AS file_count,
                     COALESCE(s.passage_count, 0) AS passage_count,
-                    s.built_at AS built_at
+                    s.built_at AS built_at,
+                    es.model AS semantic_model,
+                    es.dimension AS semantic_dimension
              FROM collections c
              LEFT JOIN files f ON f.collection_id = c.collection_id
              LEFT JOIN lexical_index_state s ON s.collection_id = c.collection_id
+             LEFT JOIN semantic_index_state es ON es.collection_id = c.collection_id
              GROUP BY c.collection_id
              ORDER BY c.name_key"
         } else {
             "SELECT c.display_name, COUNT(f.file_id) AS file_count,
-                    0 AS passage_count, NULL AS built_at
+                    0 AS passage_count, NULL AS built_at,
+                    NULL AS semantic_model, NULL AS semantic_dimension
              FROM collections c
              LEFT JOIN files f ON f.collection_id = c.collection_id
              GROUP BY c.collection_id
@@ -775,16 +779,34 @@ impl LexicalIndexStore for SqliteLexicalIndexStore {
                     row.get::<_, i64>(1)?,
                     row.get::<_, i64>(2)?,
                     row.get::<_, Option<i64>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
                 ))
             })
             .map_err(index_storage_failure)?;
 
         let mut statuses = Vec::new();
         for row in rows {
-            let (display_name, file_count, passage_count, built_at) =
-                row.map_err(index_storage_failure)?;
+            let (
+                display_name,
+                file_count,
+                passage_count,
+                built_at,
+                semantic_model,
+                semantic_dimension,
+            ) = row.map_err(index_storage_failure)?;
             let collection =
                 CollectionName::try_from(display_name.as_str()).map_err(index_storage_failure)?;
+            let semantic = match semantic_model {
+                Some(model) => {
+                    let model = EmbeddingModel::try_new(&model).map_err(index_storage_failure)?;
+                    let dimension =
+                        usize::try_from(semantic_dimension.unwrap_or(LEGACY_EMBEDDING_DIMENSION))
+                            .map_err(index_storage_failure)?;
+                    Some(SemanticStatus::new(model, dimension))
+                }
+                None => None,
+            };
             statuses.push(IndexStatus::new(
                 collection,
                 usize::try_from(file_count).map_err(index_storage_failure)?,
@@ -792,6 +814,7 @@ impl LexicalIndexStore for SqliteLexicalIndexStore {
                 built_at
                     .and_then(|value| u64::try_from(value).ok())
                     .map(Timestamp::from_unix_seconds),
+                semantic,
             ));
         }
 
@@ -1159,6 +1182,42 @@ impl SemanticIndexStore for SqliteSemanticIndexStore {
         Ok(())
     }
 
+    fn ensure_dimension(&mut self, dimension: usize) -> Result<(), SemanticIndexStoreError> {
+        let dimension = i64::try_from(dimension).map_err(semantic_storage_failure)?;
+        let active = self.active_dimension()?;
+        let table_exists = self.embeddings_table_exists()?;
+
+        if table_exists && active == dimension {
+            return Ok(());
+        }
+
+        let transaction = self
+            .connection
+            .transaction()
+            .map_err(semantic_storage_failure)?;
+        transaction
+            .execute_batch(&format!(
+                "DROP TABLE IF EXISTS embeddings;
+                 CREATE VIRTUAL TABLE embeddings USING vector(
+                     dim={dimension},
+                     type=float4,
+                     metric=cosine,
+                     metadata=\"collection_id INTEGER, file_id INTEGER, kind TEXT, position INTEGER\"
+                 );"
+            ))
+            .map_err(semantic_storage_failure)?;
+        transaction
+            .execute(
+                "INSERT INTO settings(key, value) VALUES ('embedding_dimension', ?1)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![dimension],
+            )
+            .map_err(semantic_storage_failure)?;
+        transaction.commit().map_err(semantic_storage_failure)?;
+
+        Ok(())
+    }
+
     fn status(
         &self,
         collection: &CollectionName,
@@ -1171,7 +1230,7 @@ impl SemanticIndexStore for SqliteSemanticIndexStore {
         let row = self
             .connection
             .query_row(
-                "SELECT file_set_fingerprint, model, passage_count, embedded_at
+                "SELECT file_set_fingerprint, model, dimension, passage_count, embedded_at
                  FROM semantic_index_state
                  WHERE collection_id = ?1 LIMIT 1",
                 params![collection_id],
@@ -1179,24 +1238,29 @@ impl SemanticIndexStore for SqliteSemanticIndexStore {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
-                        row.get::<_, i64>(2)?,
+                        row.get::<_, Option<i64>>(2)?,
                         row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
                     ))
                 },
             )
             .optional()
             .map_err(semantic_storage_failure)?;
 
-        row.map(|(fingerprint, model, passage_count, embedded_at)| {
-            Ok(SemanticIndexStatus::new(
-                ContentHash::try_from_hex(&fingerprint).map_err(semantic_storage_failure)?,
-                EmbeddingModel::try_new(&model).map_err(semantic_storage_failure)?,
-                usize::try_from(passage_count).map_err(semantic_storage_failure)?,
-                Timestamp::from_unix_seconds(
-                    u64::try_from(embedded_at).map_err(semantic_storage_failure)?,
-                ),
-            ))
-        })
+        row.map(
+            |(fingerprint, model, dimension, passage_count, embedded_at)| {
+                Ok(SemanticIndexStatus::new(
+                    ContentHash::try_from_hex(&fingerprint).map_err(semantic_storage_failure)?,
+                    EmbeddingModel::try_new(&model).map_err(semantic_storage_failure)?,
+                    usize::try_from(dimension.unwrap_or(LEGACY_EMBEDDING_DIMENSION))
+                        .map_err(semantic_storage_failure)?,
+                    usize::try_from(passage_count).map_err(semantic_storage_failure)?,
+                    Timestamp::from_unix_seconds(
+                        u64::try_from(embedded_at).map_err(semantic_storage_failure)?,
+                    ),
+                ))
+            },
+        )
         .transpose()
     }
 
@@ -1321,10 +1385,24 @@ impl SemanticIndexStore for SqliteSemanticIndexStore {
             .map_err(semantic_storage_failure)?
             .ok_or(SemanticIndexStoreError::CollectionNotFound)?;
 
+        let active = self.active_dimension()?;
+        let table_exists = self.embeddings_table_exists()?;
         let transaction = self
             .connection
             .transaction()
             .map_err(semantic_storage_failure)?;
+        if !table_exists {
+            transaction
+                .execute_batch(&format!(
+                    "CREATE VIRTUAL TABLE embeddings USING vector(
+                         dim={active},
+                         type=float4,
+                         metric=cosine,
+                         metadata=\"collection_id INTEGER, file_id INTEGER, kind TEXT, position INTEGER\"
+                     );"
+                ))
+                .map_err(semantic_storage_failure)?;
+        }
 
         transaction
             .execute(
@@ -1335,11 +1413,10 @@ impl SemanticIndexStore for SqliteSemanticIndexStore {
 
         for (passage, embedding) in embeddings {
             let values = embedding.as_slice();
-            if i64::try_from(values.len()).map_err(semantic_storage_failure)? != EMBEDDING_DIMENSION
-            {
+            if i64::try_from(values.len()).map_err(semantic_storage_failure)? != active {
                 return Err(SemanticIndexStoreError::Storage(Box::new(
                     std::io::Error::other(format!(
-                        "embedding dimension mismatch: expected {EMBEDDING_DIMENSION}, got {}",
+                        "embedding dimension mismatch: expected {active}, got {}",
                         values.len()
                     )),
                 )));
@@ -1367,17 +1444,19 @@ impl SemanticIndexStore for SqliteSemanticIndexStore {
         transaction
             .execute(
                 "INSERT INTO semantic_index_state(
-                    collection_id, file_set_fingerprint, model, passage_count, embedded_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5)
+                    collection_id, file_set_fingerprint, model, dimension, passage_count, embedded_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                  ON CONFLICT(collection_id) DO UPDATE SET
                      file_set_fingerprint = excluded.file_set_fingerprint,
                      model = excluded.model,
+                     dimension = excluded.dimension,
                      passage_count = excluded.passage_count,
                      embedded_at = excluded.embedded_at",
                 params![
                     collection_id,
                     fingerprint.as_str(),
                     model.as_str(),
+                    active,
                     passage_count,
                     embedded_at,
                 ],
@@ -1391,6 +1470,41 @@ impl SemanticIndexStore for SqliteSemanticIndexStore {
 }
 
 impl SqliteSemanticIndexStore {
+    /// Returns the recorded active embedding dimension, defaulting to the
+    /// legacy 384 when the setting is absent.
+    fn active_dimension(&self) -> Result<i64, SemanticIndexStoreError> {
+        let dimension = self
+            .connection
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'embedding_dimension' LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(semantic_storage_failure)?;
+
+        match dimension {
+            Some(raw) => raw
+                .parse::<i64>()
+                .map_err(|error| semantic_storage_failure(std::io::Error::other(error))),
+            None => Ok(LEGACY_EMBEDDING_DIMENSION),
+        }
+    }
+
+    /// Returns whether the `embeddings` vector table exists.
+    fn embeddings_table_exists(&self) -> Result<bool, SemanticIndexStoreError> {
+        self.connection
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM sqlite_master
+                    WHERE type = 'table' AND name = 'embeddings'
+                )",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(semantic_storage_failure)
+    }
+
     fn resolve_collection_id(
         &self,
         collection: &CollectionName,

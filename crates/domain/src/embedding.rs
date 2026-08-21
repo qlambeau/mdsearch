@@ -161,6 +161,7 @@ pub fn file_set_fingerprint(files: &[(&Path, &ContentHash)]) -> ContentHash {
 pub struct SemanticIndexStatus {
     file_set_fingerprint: ContentHash,
     model: EmbeddingModel,
+    dimension: usize,
     passage_count: usize,
     embedded_at: Timestamp,
 }
@@ -171,12 +172,14 @@ impl SemanticIndexStatus {
     pub fn new(
         file_set_fingerprint: ContentHash,
         model: EmbeddingModel,
+        dimension: usize,
         passage_count: usize,
         embedded_at: Timestamp,
     ) -> Self {
         Self {
             file_set_fingerprint,
             model,
+            dimension,
             passage_count,
             embedded_at,
         }
@@ -192,6 +195,12 @@ impl SemanticIndexStatus {
     #[must_use]
     pub fn model(&self) -> &EmbeddingModel {
         &self.model
+    }
+
+    /// Returns the dimension the vectors were generated at.
+    #[must_use]
+    pub const fn dimension(&self) -> usize {
+        self.dimension
     }
 
     /// Returns the number of embedded passages.
@@ -335,11 +344,13 @@ mod tests {
         let status = SemanticIndexStatus::new(
             fingerprint,
             model,
+            384,
             5,
             crate::Timestamp::from_unix_seconds(0),
         );
 
         assert_eq!(status.passage_count(), 5);
+        assert_eq!(status.dimension(), 384);
         assert_eq!(status.model().as_str(), "all-MiniLM-L6-v2");
         assert_eq!(
             status.file_set_fingerprint(),

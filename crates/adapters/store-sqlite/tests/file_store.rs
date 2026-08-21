@@ -16,7 +16,25 @@ fn name() -> Result<CollectionName, kv_domain::CollectionNameError> {
     CollectionName::try_from("Notes")
 }
 
-/// Covers: FR-001 and the schema version 6 migration.
+fn column_count(connection: &Connection, table: &str, column: &str) -> Result<i64, Box<dyn Error>> {
+    let count: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name = ?2",
+        [table, column],
+        |row| row.get(0),
+    )?;
+    Ok(count)
+}
+
+fn table_count(connection: &Connection, table: &str) -> Result<i64, Box<dyn Error>> {
+    let count: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        [table],
+        |row| row.get(0),
+    )?;
+    Ok(count)
+}
+
+/// Covers: FR-001 and the schema version 7 migration.
 #[test]
 fn open_creates_the_tables_at_version_six() -> Result<(), Box<dyn Error>> {
     let directory = tempdir()?;
@@ -28,58 +46,39 @@ fn open_creates_the_tables_at_version_six() -> Result<(), Box<dyn Error>> {
         connection.query_row("SELECT MAX(version) FROM schema_version", [], |row| {
             row.get(0)
         })?;
-    let files_table: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'files'",
-        [],
-        |row| row.get(0),
-    )?;
-    let passages_table: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'passages'",
-        [],
-        |row| row.get(0),
-    )?;
-    let mapping_table: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'passage_files'",
-        [],
-        |row| row.get(0),
-    )?;
-    let state_table: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'lexical_index_state'",
-        [],
-        |row| row.get(0),
-    )?;
-    let nodes_table: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'nodes'",
-        [],
-        |row| row.get(0),
-    )?;
-    let edges_table: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'edges'",
-        [],
-        |row| row.get(0),
-    )?;
-    let graph_state_table: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'graph_state'",
-        [],
-        |row| row.get(0),
-    )?;
-    let offset_column: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM pragma_table_info('passage_files') WHERE name = 'byte_offset'",
-        [],
-        |row| row.get(0),
-    )?;
+    let files_table = table_count(&connection, "files")?;
+    let passages_table = table_count(&connection, "passages")?;
+    let mapping_table = table_count(&connection, "passage_files")?;
+    let state_table = table_count(&connection, "lexical_index_state")?;
+    let nodes_table = table_count(&connection, "nodes")?;
+    let edges_table = table_count(&connection, "edges")?;
+    let graph_state_table = table_count(&connection, "graph_state")?;
+    let offset_column = column_count(&connection, "passage_files", "byte_offset")?;
+    let dimension_column = column_count(&connection, "semantic_index_state", "dimension")?;
 
-    assert_eq!(version, 6);
-    assert_eq!(files_table, 1);
-    assert_eq!(passages_table, 1);
-    assert_eq!(mapping_table, 1);
-    assert_eq!(state_table, 1);
-    assert_eq!(nodes_table, 1);
-    assert_eq!(edges_table, 1);
-    assert_eq!(graph_state_table, 1);
-    assert_eq!(offset_column, 1);
+    assert_counts(
+        version,
+        &[
+            ("files", files_table),
+            ("passages", passages_table),
+            ("passage_files", mapping_table),
+            ("lexical_index_state", state_table),
+            ("nodes", nodes_table),
+            ("edges", edges_table),
+            ("graph_state", graph_state_table),
+            ("passage_files.byte_offset", offset_column),
+            ("semantic_index_state.dimension", dimension_column),
+        ],
+    );
 
     Ok(())
+}
+
+fn assert_counts(version: i64, counts: &[(&str, i64)]) {
+    assert_eq!(version, 7);
+    for (name, count) in counts {
+        assert_eq!(*count, 1, "unexpected count for {name}");
+    }
 }
 
 /// Covers: FR-009 — re-adding a path replaces content without duplicating.
@@ -207,7 +206,7 @@ fn migrates_a_version_one_database_to_current() -> Result<(), Box<dyn Error>> {
             row.get(0)
         })?;
 
-    assert_eq!(version, 6);
+    assert_eq!(version, 7);
 
     Ok(())
 }
@@ -268,7 +267,7 @@ fn migrates_a_version_three_database_to_current() -> Result<(), Box<dyn Error>> 
         |row| row.get(0),
     )?;
 
-    assert_eq!(version, 6);
+    assert_eq!(version, 7);
     assert_eq!(offset_column, 1);
 
     Ok(())

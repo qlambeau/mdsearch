@@ -8,6 +8,7 @@ use kv_application::{
     SemanticIndexStore,
 };
 use kv_domain::{CollectionName, Embedding, EmbeddingModel, PassageKind, Timestamp};
+use rusqlite::Connection;
 use tempfile::tempdir;
 
 use kv_store_sqlite::{
@@ -95,6 +96,37 @@ fn an_embedded_collection_contributes_both_legs() -> Result<(), Box<dyn Error>> 
 
     assert!(!candidates.lexical().is_empty());
     assert!(!candidates.semantic().is_empty());
+
+    Ok(())
+}
+
+/// Covers: REQ-011 FR-019 — a recorded dimension disagreeing with the active
+/// dimension fails the command before any results are returned.
+#[test]
+fn dimension_mismatch_fails_before_results() -> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let notes = name("Notes")?;
+    build(directory.path(), &notes, &[("a.md", "borrowing rules")])?;
+    embed(directory.path(), &notes)?;
+
+    let connection = Connection::open(directory.path().join("collections.db"))?;
+    connection.execute(
+        "INSERT INTO settings(key, value) VALUES ('embedding_dimension', '1024')
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [],
+    )?;
+    drop(connection);
+
+    let store = SqliteHybridSearchStore::open(&directory.path().join("collections.db"))?;
+    let error = store
+        .candidates("\"borrowing\"", Some(&embedding()), SearchScope::All, 10)
+        .err()
+        .ok_or_else(|| std::io::Error::other("a dimension mismatch should fail"))?;
+
+    assert!(
+        matches!(error, HybridSearchStoreError::DimensionMismatch { .. }),
+        "unexpected error: {error:?}"
+    );
 
     Ok(())
 }

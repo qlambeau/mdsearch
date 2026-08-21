@@ -37,6 +37,6 @@ pub use ports::{
     FileStore, FileSystem, GraphStore, HybridCandidate, HybridCandidates, HybridSearchStore,
     InMemoryGraphStore, IndexState, IndexStatus, LexicalIndexStore, LexicalSearchStore, Neighbor,
     Position, ReconcileOutcome, Reranker, RetrievedFile, SearchResult, SearchResultSet,
-    SearchScope, SemanticIndexStore, StoredFile, traverse_graph,
+    SearchScope, SemanticIndexStore, SemanticStatus, StoredFile, traverse_graph,
 };
 pub use update_collection::{UpdateCollection, UpdateOutcome, UpdateTarget};

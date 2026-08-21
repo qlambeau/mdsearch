@@ -129,6 +129,7 @@ struct FakeStore {
     fail_rebuild: bool,
     recorded_model: RefCell<Option<String>>,
     recorded_reranker: Rc<RefCell<Option<String>>>,
+    recorded_dimension: RefCell<Option<usize>>,
 }
 
 impl Default for FakeStore {
@@ -146,6 +147,7 @@ impl Default for FakeStore {
             fail_rebuild: false,
             recorded_model: RefCell::new(None),
             recorded_reranker: Rc::new(RefCell::new(None)),
+            recorded_dimension: RefCell::new(None),
         }
     }
 }
@@ -227,6 +229,16 @@ impl SemanticIndexStore for FakeStore {
         Ok(())
     }
 
+    fn ensure_dimension(&mut self, dimension: usize) -> Result<(), SemanticIndexStoreError> {
+        if self.fail_store {
+            return Err(SemanticIndexStoreError::Storage(Box::new(
+                std::io::Error::other("store failed"),
+            )));
+        }
+        *self.recorded_dimension.borrow_mut() = Some(dimension);
+        Ok(())
+    }
+
     fn status(
         &self,
         collection: &CollectionName,
@@ -245,6 +257,7 @@ impl SemanticIndexStore for FakeStore {
                     ContentHash::from_content(fingerprint.as_bytes()),
                     Self::model(&model)
                         .map_err(|error| SemanticIndexStoreError::Storage(Box::new(error)))?,
+                    384,
                     count,
                     Timestamp::from_unix_seconds(at),
                 ))

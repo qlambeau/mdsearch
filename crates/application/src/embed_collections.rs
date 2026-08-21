@@ -323,10 +323,16 @@ where
             .map_err(|error| error.to_string())?;
 
         let passage_count = match build_pairs(passages, vectors) {
-            Some(pairs) => self
-                .store
-                .rebuild(collection, model, now, &pairs)
-                .map_err(|error| semantic_error_message(&error))?,
+            Some(pairs) => {
+                if let Some((_, first)) = pairs.first() {
+                    self.store
+                        .ensure_dimension(first.as_slice().len())
+                        .map_err(|error| semantic_error_message(&error))?;
+                }
+                self.store
+                    .rebuild(collection, model, now, &pairs)
+                    .map_err(|error| semantic_error_message(&error))?
+            }
             None => {
                 return Err("embedding count does not match passage count".to_owned());
             }

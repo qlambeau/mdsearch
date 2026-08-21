@@ -19,7 +19,7 @@ pub use file_store::{FileRecord, FileStore, ReconcileOutcome, StoredFile};
 pub use file_system::FileSystem;
 pub use graph_store::{GraphStore, InMemoryGraphStore, Neighbor, traverse_graph};
 pub use hybrid_search_store::{HybridCandidate, HybridCandidates, HybridSearchStore};
-pub use lexical_index_store::{IndexState, IndexStatus, LexicalIndexStore};
+pub use lexical_index_store::{IndexState, IndexStatus, LexicalIndexStore, SemanticStatus};
 pub use lexical_search_store::{
     LexicalSearchStore, Position, SearchResult, SearchResultSet, SearchScope,
 };

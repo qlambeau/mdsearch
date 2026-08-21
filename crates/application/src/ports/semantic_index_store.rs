@@ -88,6 +88,19 @@ pub trait SemanticIndexStore {
     /// Returns a storage error when the setting cannot be written.
     fn set_reranker_model(&mut self, model: &RerankerModel) -> Result<(), SemanticIndexStoreError>;
 
+    /// Ensures the shared vector table exists at `dimension`.
+    ///
+    /// When the recorded active dimension differs from `dimension` (or no
+    /// table exists yet), the `embeddings` table is recreated at `dimension`
+    /// and the `embedding_dimension` setting is updated, transactionally.
+    /// This is a no-op when the table already exists at `dimension`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when the table cannot be recreated or the
+    /// setting cannot be written.
+    fn ensure_dimension(&mut self, dimension: usize) -> Result<(), SemanticIndexStoreError>;
+
     /// Returns the semantic index status of one collection, if embedded.
     ///
     /// # Errors

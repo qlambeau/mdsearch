@@ -49,6 +49,23 @@ Feature: Build the semantic index with the embed command
     And the summary reports "Notes" embedded under model "beta"
     And the summary reports "Archive" embedded under model "beta"
 
+  Scenario: A 1024-dimension model embeds without a dimension error
+    Given a collection named "Notes" has files and a built lexical index
+    And the model assets for "bge-large-en-v1.5" are cached locally
+    When I run `mdsearch embed --model bge-large-en-v1.5`
+    Then the embed succeeds
+    And the summary reports "Notes" embedded under "bge-large-en-v1.5"
+    And no dimension error is reported
+
+  Scenario: Rebuilding under a different-dimension model recreates the vector table
+    Given a collection named "Notes" has files and a built lexical index
+    And "Notes" was embedded under the 1024-dimension model "bge-large-en-v1.5"
+    And the default model assets are cached locally
+    When I run `mdsearch embed`
+    Then the embed succeeds
+    And "Notes" is re-embedded under the default model
+    And the semantic index for "Notes" is rebuilt at the default model's dimension
+
   Scenario: Unsupported model fails before any collection work
     Given a collection named "Notes" has files and a built lexical index
     When I run `mdsearch embed --model bogus`

@@ -264,6 +264,13 @@ pub enum HybridSearchStoreError {
     /// An in-scope collection's semantic index is stale.
     #[error("semantic index is stale; run mdsearch embed")]
     StaleSemanticIndex,
+    /// An in-scope collection's recorded dimension disagrees with the active
+    /// embedding dimension.
+    #[error("semantic index dimension mismatch for collection {collection}")]
+    DimensionMismatch {
+        /// The collection whose recorded dimension disagrees.
+        collection: String,
+    },
     /// The database operation failed after it was opened.
     #[error("hybrid search storage failed")]
     Storage(#[source] Box<dyn Error + Send + Sync>),

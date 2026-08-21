@@ -71,6 +71,7 @@ is, before the search command is added in a later EPIC-003 slice.
 | FR-014 | `mdsearch index status` against a missing database shall fail semantically without creating a database file. | Must | US-006; Report a missing database without creating a file |
 | FR-015 | `mdsearch index status` against a database with no collections shall produce empty output. | Must | US-006; A fresh database with no collections produces empty output |
 | FR-016 | `--database PATH` shall select the database used by `collection update` and `mdsearch index status`. | Must | US-006; Report a missing database without creating a file |
+| FR-017 | For a collection with a recorded semantic state, `mdsearch index status` shall additionally report the embedding model and the dimension its vectors were built at; collections without a semantic state row report nothing extra. | Must | US-015; Status reports the recorded embedding model and dimension |
 | FR-017 | `collection update --all` shall rebuild the lexical index for every collection. | Must | US-006; Update --all rebuilds the index for every collection |
 
 ## Postconditions And Invariants

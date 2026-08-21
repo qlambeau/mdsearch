@@ -50,6 +50,14 @@ Feature: Hybrid search with lexical-semantic fusion and cross-encoder re-ranking
     Then the hybrid search succeeds
     And the lexical passage from "Notes" is returned
 
+  Scenario: A dimension mismatch on the semantic leg fails the command
+    Given a collection named "Notes" has a built lexical index and a built semantic index
+    And the stored vectors for "Notes" disagree with the recorded dimension
+    When I run `mdsearch hybrid borrowing`
+    Then the operation fails
+    And the output communicates a dimension mismatch
+    And no partial results are returned
+
   Scenario: Fail when an in-scope semantic index is stale
     Given a collection named "Notes" has a built lexical index and a built semantic index
     And the stored files changed after the semantic index was built

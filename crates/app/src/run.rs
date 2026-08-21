@@ -749,9 +749,19 @@ fn render_embed_outcome(outcome: &EmbedOutcome) -> String {
 }
 
 fn render_index_status(status: &IndexStatus) -> String {
+    let semantic = status
+        .semantic()
+        .map(|line| {
+            format!(
+                ", embedded with {} ({} dimensions)",
+                line.model().as_str(),
+                line.dimension()
+            )
+        })
+        .unwrap_or_default();
     match (status.state(), status.built_at()) {
         (IndexState::Built, Some(timestamp)) => format!(
-            "collection \"{}\": lexical index built, {} file(s), {} passage(s), built at {}",
+            "collection \"{}\": lexical index built, {} file(s), {} passage(s), built at {}{semantic}",
             status.collection().display_name(),
             status.file_count(),
             status.passage_count(),

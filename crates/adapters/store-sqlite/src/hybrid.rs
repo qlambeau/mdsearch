@@ -94,6 +94,7 @@ impl HybridSearchStore for SqliteHybridSearchStore {
 
         let collection_id = self.resolve_scope(scope)?;
         self.check_staleness(collection_id)?;
+        self.check_dimensions(collection_id)?;
 
         let lexical = self.lexical_leg(fts5_query, collection_id, pool)?;
         let semantic = match query_embedding {
@@ -161,6 +162,61 @@ impl SqliteHybridSearchStore {
         }
 
         Ok(())
+    }
+
+    /// Fails when any in-scope collection's recorded dimension disagrees with
+    /// the active embedding dimension.
+    ///
+    /// A collection with no recorded dimension is legacy and read as 384.
+    fn check_dimensions(&self, collection_id: Option<i64>) -> Result<(), HybridSearchStoreError> {
+        let active = self.active_dimension()?;
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT c.display_name, COALESCE(s.dimension, ?1) AS dimension
+                 FROM semantic_index_state s
+                 JOIN collections c ON c.collection_id = s.collection_id
+                 WHERE ?2 IS NULL OR c.collection_id = ?2
+                 ORDER BY c.name_key",
+            )
+            .map_err(hybrid_storage_failure)?;
+        let rows = statement
+            .query_map(params![active, collection_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(hybrid_storage_failure)?;
+
+        for row in rows {
+            let (display_name, dimension) = row.map_err(hybrid_storage_failure)?;
+            if dimension != active {
+                return Err(HybridSearchStoreError::DimensionMismatch {
+                    collection: display_name,
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Returns the recorded active embedding dimension, defaulting to the
+    /// legacy 384 when the setting is absent.
+    fn active_dimension(&self) -> Result<i64, HybridSearchStoreError> {
+        let dimension = self
+            .connection
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'embedding_dimension' LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(hybrid_storage_failure)?;
+
+        match dimension {
+            Some(raw) => raw.parse::<i64>().map_err(|error| {
+                HybridSearchStoreError::Storage(Box::new(std::io::Error::other(error)))
+            }),
+            None => Ok(384),
+        }
     }
 
     /// Computes the current file-set fingerprint for one collection.
@@ -267,6 +323,21 @@ impl SqliteHybridSearchStore {
         collection_id: Option<i64>,
         pool: usize,
     ) -> Result<Vec<HybridCandidate>, HybridSearchStoreError> {
+        let table_exists: bool = self
+            .connection
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM sqlite_master
+                    WHERE type = 'table' AND name = 'embeddings'
+                )",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(hybrid_storage_failure)?;
+        if !table_exists {
+            return Ok(Vec::new());
+        }
+
         let blob = vector_blob(query_embedding.as_slice());
         let pool = i64::try_from(pool).map_err(hybrid_storage_failure)?;
         let sql = "SELECT c.display_name, f.path, e.kind, passages.content,

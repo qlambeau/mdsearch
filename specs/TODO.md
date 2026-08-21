@@ -124,6 +124,8 @@ fixtures, and regression scenarios in `007-lexical-search` and
 
 - **Kind:** Architecture constraint
 - **Priority:** High (blocks a supported-looking capability)
+- **Status:** `PROMOTED` — committed as EPIC-009 in `PRD-001` (US-015,
+  `specs/015-embedding-dimensions`); resolved decision recorded as DEC-014
 - **Locations:**
   - `crates/adapters/store-sqlite/src/lib.rs:41` —
     `const EMBEDDING_DIMENSION: i64 = 384;`
@@ -702,7 +704,7 @@ execution for future compatibility.
 | OBS | Candidate epic (working title) | Kind | Suggested scope for v0.2.0 |
 | --- | --- | --- | --- |
 | OBS-001 | Unify query semantics across lexical and hybrid search | Product-visible behavior | `PROMOTED` to EPIC-008 (US-014) |
-| OBS-002 | Embedding model dimension support (or fail-fast on unsupported dims) | Product-visible behavior + schema | Likely in-scope; minimum viable = fail fast at model selection |
+| OBS-002 | Embedding model dimension support (or fail-fast on unsupported dims) | Product-visible behavior + schema | `PROMOTED` to EPIC-009 (US-015) |
 | OBS-003 | Deterministic FTS5 query validation and error classification | Robustness | `PROMOTED` — folded into EPIC-008 (US-014) |
 | OBS-004 | Index-time passage positions (drop per-result file re-read) | Performance | Candidate; validate against latency targets (PRD-001 §3/§5) |
 | OBS-005 | SQLite adapter consolidation (shared helpers/SQL) | Maintainability | Candidate; parkable if capacity is tight |
@@ -725,8 +727,9 @@ execution for future compatibility.
    new PRD. None of the entries above obviously introduces new personas or a
    product pivot, which leans toward an `PRD-001` update, but the owner decides.
 2. **Epic selection** — OBS-001 (with OBS-003 folded in) is committed as
-   EPIC-008 / US-014; the remaining observations await epic selection. The
-   provisional mapping above is a suggestion only.
+   EPIC-008 / US-014 and OBS-002 is committed as EPIC-009 / US-015; the
+   remaining observations await epic selection. The provisional mapping above
+   is a suggestion only.
 3. **Severity confirmation** — each entry records a proposed priority; confirm
    or adjust during epic refinement.
 

@@ -1,4 +1,4 @@
-use kv_domain::{CollectionName, Timestamp};
+use kv_domain::{CollectionName, EmbeddingModel, Timestamp};
 
 use crate::IndexStoreError;
 
@@ -11,6 +11,33 @@ pub enum IndexState {
     NotBuilt,
 }
 
+/// The recorded semantic (embedding) state of a collection.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SemanticStatus {
+    model: EmbeddingModel,
+    dimension: usize,
+}
+
+impl SemanticStatus {
+    /// Creates a semantic status record.
+    #[must_use]
+    pub const fn new(model: EmbeddingModel, dimension: usize) -> Self {
+        Self { model, dimension }
+    }
+
+    /// Returns the embedding model the vectors were generated with.
+    #[must_use]
+    pub fn model(&self) -> &EmbeddingModel {
+        &self.model
+    }
+
+    /// Returns the dimension the vectors were generated at.
+    #[must_use]
+    pub const fn dimension(&self) -> usize {
+        self.dimension
+    }
+}
+
 /// The observable state of one collection's lexical index.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IndexStatus {
@@ -18,6 +45,7 @@ pub struct IndexStatus {
     file_count: usize,
     passage_count: usize,
     built_at: Option<Timestamp>,
+    semantic: Option<SemanticStatus>,
 }
 
 impl IndexStatus {
@@ -28,12 +56,14 @@ impl IndexStatus {
         file_count: usize,
         passage_count: usize,
         built_at: Option<Timestamp>,
+        semantic: Option<SemanticStatus>,
     ) -> Self {
         Self {
             collection,
             file_count,
             passage_count,
             built_at,
+            semantic,
         }
     }
 
@@ -59,6 +89,12 @@ impl IndexStatus {
     #[must_use]
     pub const fn built_at(&self) -> Option<Timestamp> {
         self.built_at
+    }
+
+    /// Returns the recorded semantic state, if the collection was embedded.
+    #[must_use]
+    pub const fn semantic(&self) -> Option<&SemanticStatus> {
+        self.semantic.as_ref()
     }
 
     /// Returns whether the index has been built.
