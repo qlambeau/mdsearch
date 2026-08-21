@@ -24,6 +24,7 @@ use crate::cli::{
 };
 use crate::graph_query::{build_schema, handle};
 use crate::model_cache;
+use crate::progress;
 use crate::related::{RelatedFile, related_files};
 
 /// Executes one `mdsearch` CLI invocation with an injected home directory.
@@ -706,7 +707,17 @@ fn embed(
         None => EmbedScope::All,
     };
 
-    let report = use_case.execute(scope, model.as_ref(), reranker.as_ref(), download)?;
+    let mut progress_view = progress::ProgressRenderer::default();
+    let report = use_case.execute(
+        scope,
+        model.as_ref(),
+        reranker.as_ref(),
+        download,
+        &mut |event| {
+            progress_view.handle(event);
+        },
+    )?;
+    progress_view.finish();
 
     let rendered = render_embed_report(&report);
     if report.any_failed() {

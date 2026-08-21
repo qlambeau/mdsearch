@@ -1,5 +1,5 @@
 use kv_domain::{
-    CollectionName, Embedding, EmbeddingModel, RerankerModel, SemanticPassage, Timestamp,
+    CollectionName, Embedding, EmbeddingModel, FileId, RerankerModel, SemanticPassage, Timestamp,
 };
 
 use crate::{
@@ -23,6 +23,25 @@ pub enum SkipReason {
     NoFiles,
     /// The collection's lexical index has never been built.
     LexicalNotBuilt,
+}
+
+/// A progress event emitted during an embedding run.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EmbedProgress {
+    /// Per-file progress within a collection's embedding phase.
+    Files {
+        /// The collection being embedded.
+        collection: CollectionName,
+        /// Files whose passages have been embedded so far.
+        completed_files: usize,
+        /// Files with passages in this collection's embedding set.
+        total_files: usize,
+    },
+    /// The collection's vectors are being written to the index.
+    Writing {
+        /// The collection being written.
+        collection: CollectionName,
+    },
 }
 
 /// The outcome for one processed collection.
@@ -141,6 +160,10 @@ where
     /// Builds the semantic index for the collections selected by `scope` and
     /// optionally provisions the re-ranker.
     ///
+    /// Progress events (`EmbedProgress`) are reported through `progress`
+    /// during the embedding phase; the vector write phase is announced with a
+    /// single `Writing` event per collection.
+    ///
     /// # Errors
     ///
     /// Returns an error when the model or re-ranker is unsupported or
@@ -153,6 +176,7 @@ where
         model: Option<&EmbeddingModel>,
         reranker: Option<&RerankerModel>,
         download: bool,
+        progress: &mut dyn FnMut(EmbedProgress),
     ) -> Result<EmbedReport, EmbedError> {
         if let Some(reranker_model) = reranker {
             self.provision_reranker(reranker_model, download)?;
@@ -184,7 +208,7 @@ where
         }
 
         for collection in process {
-            let outcome = self.embed_collection(&collection, &effective, now);
+            let outcome = self.embed_collection(&collection, &effective, now, progress);
             match outcome {
                 Ok(outcome) => report.push(outcome),
                 Err(message) => report.push(EmbedOutcome::Failed {
@@ -286,6 +310,7 @@ where
         collection: &CollectionName,
         model: &EmbeddingModel,
         now: Timestamp,
+        progress: &mut dyn FnMut(EmbedProgress),
     ) -> Result<EmbedOutcome, String> {
         let fingerprint = self
             .store
@@ -313,29 +338,50 @@ where
             .store
             .passages(collection)
             .map_err(|error| semantic_error_message(&error))?;
-        let texts = passages
-            .iter()
-            .map(SemanticPassage::text)
-            .collect::<Vec<_>>();
-        let vectors = self
-            .generator
-            .embed(model, &texts)
-            .map_err(|error| error.to_string())?;
+        let mut pairs = Vec::with_capacity(passages.len());
+        let mut groups: Vec<(FileId, Vec<SemanticPassage>)> = Vec::new();
+        for passage in passages {
+            match groups.iter_mut().find(|(file, _)| *file == passage.file()) {
+                Some((_, file_passages)) => file_passages.push(passage),
+                None => groups.push((passage.file(), vec![passage])),
+            }
+        }
+        let total_files = groups.len();
+        for (index, (_, file_passages)) in groups.iter().enumerate() {
+            let texts = file_passages
+                .iter()
+                .map(SemanticPassage::text)
+                .collect::<Vec<_>>();
+            let vectors = self
+                .generator
+                .embed(model, &texts)
+                .map_err(|error| error.to_string())?;
+            let file_pairs = build_pairs(file_passages.clone(), vectors)
+                .ok_or_else(|| "embedding count does not match passage count".to_owned())?;
+            pairs.extend(file_pairs);
+            progress(EmbedProgress::Files {
+                collection: collection.clone(),
+                completed_files: index + 1,
+                total_files,
+            });
+        }
+        progress(EmbedProgress::Writing {
+            collection: collection.clone(),
+        });
 
-        let passage_count = match build_pairs(passages, vectors) {
-            Some(pairs) => {
-                if let Some((_, first)) = pairs.first() {
-                    self.store
-                        .ensure_dimension(first.as_slice().len())
-                        .map_err(|error| semantic_error_message(&error))?;
-                }
+        let passage_count = match pairs.first() {
+            Some((_, first)) => {
+                self.store
+                    .ensure_dimension(first.as_slice().len())
+                    .map_err(|error| semantic_error_message(&error))?;
                 self.store
                     .rebuild(collection, model, now, &pairs)
                     .map_err(|error| semantic_error_message(&error))?
             }
-            None => {
-                return Err("embedding count does not match passage count".to_owned());
-            }
+            None => self
+                .store
+                .rebuild(collection, model, now, &pairs)
+                .map_err(|error| semantic_error_message(&error))?,
         };
 
         Ok(EmbedOutcome::Embedded {

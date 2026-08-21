@@ -835,7 +835,8 @@ message that distinguishes "not downloaded" from "downloaded elsewhere".
 
 - **Kind:** Scalability / performance (user experience at PRD scale)
 - **Priority:** Medium (PRD-scale collections: 100–5,000 docs, 100–300 page files)
-- **Status:** `CANDIDATE`
+- **Status:** `PROMOTED` — committed as EPIC-012 in `PRD-001` (US-018,
+  `specs/018-embed-progress`); resolved decision recorded as DEC-017
 - **Locations:**
   - `crates/application/src/embed_collections.rs:312-323` — the whole
     collection's passages are loaded and embedded in one batched
@@ -912,7 +913,7 @@ unchanged, and cover the callback contract with unit tests.
 | OBS-013 | GraphQL query layer cleanup | Maintainability / DRY | Low priority / cleanup |
 | OBS-014 | Model cache placement (`--download` target inside `.mdsearch`) | Behavior inconsistency | `PROMOTED` to EPIC-011 (US-017) |
 | OBS-015 | Reliable "downloaded" detection (no false "pass --download" advice) | Robustness / correctness | `PROMOTED` — folded into EPIC-011 (US-017) |
-| OBS-016 | Ingestion progress reporting (stderr progress bar / file counter) | Scalability / performance | Candidate; UX at PRD scale |
+| OBS-016 | Ingestion progress reporting (stderr progress bar / file counter) | Scalability / performance | `PROMOTED` to EPIC-012 (US-018) |
 
 ## Decisions Still Open
 

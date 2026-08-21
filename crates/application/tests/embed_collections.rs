@@ -380,7 +380,7 @@ fn embeds_every_eligible_collection() -> Result<(), Box<dyn Error>> {
         FakeReranker::default(),
     );
 
-    let report = use_case.execute(EmbedScope::All, None, None, false)?;
+    let report = use_case.execute(EmbedScope::All, None, None, false, &mut |_| {})?;
 
     assert_eq!(report.outcomes().len(), 1);
     assert!(!report.any_failed());
@@ -420,7 +420,7 @@ fn reports_an_unchanged_collection_as_already_current() -> Result<(), Box<dyn Er
         FakeReranker::default(),
     );
 
-    let report = use_case.execute(EmbedScope::All, None, None, false)?;
+    let report = use_case.execute(EmbedScope::All, None, None, false, &mut |_| {})?;
 
     assert!(matches!(
         report.outcomes().first(),
@@ -460,7 +460,7 @@ fn rebuilds_when_the_file_set_changed() -> Result<(), Box<dyn Error>> {
         FakeReranker::default(),
     );
 
-    let report = use_case.execute(EmbedScope::All, None, None, false)?;
+    let report = use_case.execute(EmbedScope::All, None, None, false, &mut |_| {})?;
 
     assert!(matches!(
         report.outcomes().first(),
@@ -504,7 +504,7 @@ fn model_switch_rebuilds_every_embedded_collection() -> Result<(), Box<dyn Error
     );
     let beta = model("beta")?;
 
-    let report = use_case.execute(EmbedScope::All, Some(&beta), None, false)?;
+    let report = use_case.execute(EmbedScope::All, Some(&beta), None, false, &mut |_| {})?;
 
     let names = report
         .outcomes()
@@ -551,7 +551,13 @@ fn model_switch_rebuilds_embedded_collections_even_under_a_narrow_scope()
     let beta = model("beta")?;
     let notes = collection("Notes")?;
 
-    let report = use_case.execute(EmbedScope::Collection(&notes), Some(&beta), None, false)?;
+    let report = use_case.execute(
+        EmbedScope::Collection(&notes),
+        Some(&beta),
+        None,
+        false,
+        &mut |_| {},
+    )?;
 
     let names = report
         .outcomes()
@@ -583,7 +589,7 @@ fn unsupported_model_fails_before_any_collection_work() -> Result<(), Box<dyn Er
 
     assert!(
         use_case
-            .execute(EmbedScope::All, Some(&bogus), None, false)
+            .execute(EmbedScope::All, Some(&bogus), None, false, &mut |_| {})
             .is_err()
     );
 
@@ -609,7 +615,7 @@ fn missing_local_model_fails_before_any_collection_work() {
 
     assert!(
         use_case
-            .execute(EmbedScope::All, None, None, false)
+            .execute(EmbedScope::All, None, None, false, &mut |_| {})
             .is_err()
     );
 }
@@ -639,7 +645,7 @@ fn download_allows_an_uncached_model() -> Result<(), Box<dyn Error>> {
         FakeReranker::default(),
     );
 
-    let report = use_case.execute(EmbedScope::All, None, None, true)?;
+    let report = use_case.execute(EmbedScope::All, None, None, true, &mut |_| {})?;
 
     assert!(!report.any_failed());
     assert!(matches!(
@@ -667,7 +673,7 @@ fn skips_a_collection_without_a_built_lexical_index() -> Result<(), Box<dyn Erro
         FakeReranker::default(),
     );
 
-    let report = use_case.execute(EmbedScope::All, None, None, false)?;
+    let report = use_case.execute(EmbedScope::All, None, None, false, &mut |_| {})?;
 
     assert!(matches!(
         report.outcomes().first(),
@@ -699,7 +705,13 @@ fn unbuilt_lexical_index_fails_when_explicitly_targeted() -> Result<(), Box<dyn 
     let archive = collection("Archive")?;
 
     assert!(matches!(
-        use_case.execute(EmbedScope::Collection(&archive), None, None, false),
+        use_case.execute(
+            EmbedScope::Collection(&archive),
+            None,
+            None,
+            false,
+            &mut |_| {}
+        ),
         Err(kv_application::EmbedError::IndexNotBuilt)
     ));
 
@@ -723,7 +735,7 @@ fn skips_a_collection_with_no_files() -> Result<(), Box<dyn Error>> {
         FakeReranker::default(),
     );
 
-    let report = use_case.execute(EmbedScope::All, None, None, false)?;
+    let report = use_case.execute(EmbedScope::All, None, None, false, &mut |_| {})?;
 
     assert!(matches!(
         report.outcomes().first(),
@@ -754,7 +766,13 @@ fn skips_a_no_files_collection_even_when_targeted() -> Result<(), Box<dyn Error>
     );
     let empty = collection("Empty")?;
 
-    let report = use_case.execute(EmbedScope::Collection(&empty), None, None, false)?;
+    let report = use_case.execute(
+        EmbedScope::Collection(&empty),
+        None,
+        None,
+        false,
+        &mut |_| {},
+    )?;
 
     assert!(matches!(
         report.outcomes().first(),
@@ -785,7 +803,13 @@ fn unknown_collection_fails_when_explicitly_targeted() -> Result<(), Box<dyn Err
     let journal = collection("Journal")?;
 
     assert!(matches!(
-        use_case.execute(EmbedScope::Collection(&journal), None, None, false),
+        use_case.execute(
+            EmbedScope::Collection(&journal),
+            None,
+            None,
+            false,
+            &mut |_| {}
+        ),
         Err(kv_application::EmbedError::CollectionNotFound)
     ));
 
@@ -825,7 +849,7 @@ fn per_collection_failure_is_reported_and_processing_continues() -> Result<(), B
         FakeReranker::default(),
     );
 
-    let report = use_case.execute(EmbedScope::All, None, None, false)?;
+    let report = use_case.execute(EmbedScope::All, None, None, false, &mut |_| {})?;
 
     assert_eq!(report.outcomes().len(), 2);
     assert!(report.any_failed());
@@ -866,7 +890,7 @@ fn failed_rebuild_reports_a_failure() -> Result<(), Box<dyn Error>> {
         FakeReranker::default(),
     );
 
-    let report = use_case.execute(EmbedScope::All, None, None, false)?;
+    let report = use_case.execute(EmbedScope::All, None, None, false, &mut |_| {})?;
 
     assert!(report.any_failed());
     assert!(matches!(
@@ -894,7 +918,7 @@ fn empty_report_when_no_collections_are_eligible() -> Result<(), Box<dyn Error>>
         FakeReranker::default(),
     );
 
-    let report = use_case.execute(EmbedScope::All, None, None, false)?;
+    let report = use_case.execute(EmbedScope::All, None, None, false, &mut |_| {})?;
 
     assert!(report.outcomes().is_empty());
 
@@ -925,7 +949,13 @@ fn provisions_and_records_a_reranker() -> Result<(), Box<dyn Error>> {
     let mut use_case = EmbedCollections::new(generator, store, FakeClock { now: 1 }, reranker);
     let reranker_name = RerankerModel::try_new("bge-reranker-base")?;
 
-    use_case.execute(EmbedScope::All, None, Some(&reranker_name), false)?;
+    use_case.execute(
+        EmbedScope::All,
+        None,
+        Some(&reranker_name),
+        false,
+        &mut |_| {},
+    )?;
 
     assert_eq!(*recorded.borrow(), Some("bge-reranker-base".to_owned()));
 
@@ -948,7 +978,7 @@ fn an_unsupported_reranker_fails() -> Result<(), Box<dyn Error>> {
     let bogus = RerankerModel::try_new("bogus")?;
 
     assert!(matches!(
-        use_case.execute(EmbedScope::All, None, Some(&bogus), false),
+        use_case.execute(EmbedScope::All, None, Some(&bogus), false, &mut |_| {}),
         Err(kv_application::EmbedError::Reranker(
             RerankError::UnsupportedModel { .. }
         ))
@@ -971,7 +1001,7 @@ fn an_uncached_reranker_fails_without_download() -> Result<(), Box<dyn Error>> {
     let name = RerankerModel::try_new("bge-reranker-base")?;
 
     assert!(matches!(
-        use_case.execute(EmbedScope::All, None, Some(&name), false),
+        use_case.execute(EmbedScope::All, None, Some(&name), false, &mut |_| {}),
         Err(kv_application::EmbedError::Reranker(
             RerankError::ModelNotCached { .. }
         ))
@@ -1003,7 +1033,7 @@ fn download_allows_an_uncached_reranker() -> Result<(), Box<dyn Error>> {
     let mut use_case = EmbedCollections::new(generator, store, FakeClock { now: 1 }, reranker);
     let name = RerankerModel::try_new("bge-reranker-base")?;
 
-    let report = use_case.execute(EmbedScope::All, None, Some(&name), true)?;
+    let report = use_case.execute(EmbedScope::All, None, Some(&name), true, &mut |_| {})?;
 
     assert!(!report.any_failed());
 
@@ -1017,4 +1047,224 @@ fn empty_report_has_no_failures() {
 
     assert!(!report.any_failed());
     assert!(report.outcomes().is_empty());
+}
+
+/// Covers: REQ-018 FR-001/FR-002/FR-005 — per-file progress events and a
+/// Writing event are emitted during embedding.
+#[test]
+fn reports_per_file_progress_during_embedding() -> Result<(), Box<dyn Error>> {
+    let mut store = FakeStore::default();
+    store.targets.push(("Notes".to_owned(), true, true));
+    store.passages.insert(
+        "Notes".to_owned(),
+        vec![
+            (1, "body".to_owned(), 0, "borrowing".to_owned()),
+            (1, "body".to_owned(), 1, "ownership".to_owned()),
+            (2, "body".to_owned(), 0, "lifetimes".to_owned()),
+            (3, "body".to_owned(), 0, "traits".to_owned()),
+        ],
+    );
+    store
+        .fingerprints
+        .insert("Notes".to_owned(), fingerprint("files"));
+    let generator = FakeGenerator {
+        available: true,
+        supported: supported("all-MiniLM-L6-v2"),
+        ..FakeGenerator::default()
+    };
+    let mut use_case = EmbedCollections::new(
+        generator,
+        store,
+        FakeClock { now: 1 },
+        FakeReranker::default(),
+    );
+
+    let events: Rc<RefCell<Vec<String>>> = Rc::default();
+    let recorded = events.clone();
+    let mut progress = move |event: kv_application::EmbedProgress| match event {
+        kv_application::EmbedProgress::Files {
+            collection,
+            completed_files,
+            total_files,
+        } => {
+            recorded.borrow_mut().push(format!(
+                "{}:{}/{}",
+                collection.display_name(),
+                completed_files,
+                total_files
+            ));
+        }
+        kv_application::EmbedProgress::Writing { collection } => {
+            recorded
+                .borrow_mut()
+                .push(format!("writing:{}", collection.display_name()));
+        }
+    };
+
+    let report = use_case.execute(EmbedScope::All, None, None, false, &mut progress)?;
+
+    assert_eq!(
+        *events.borrow(),
+        vec![
+            "Notes:1/3".to_owned(),
+            "Notes:2/3".to_owned(),
+            "Notes:3/3".to_owned(),
+            "writing:Notes".to_owned(),
+        ]
+    );
+    assert_eq!(report.outcomes().len(), 1);
+
+    Ok(())
+}
+
+/// Covers: REQ-018 FR-003 — skipped and already-current collections emit no
+/// progress events.
+#[test]
+fn emits_no_progress_for_skipped_or_current_collections() -> Result<(), Box<dyn Error>> {
+    let mut store = FakeStore::default();
+    store.targets.push(("Empty".to_owned(), false, true));
+    store.targets.push(("Current".to_owned(), true, true));
+    store
+        .fingerprints
+        .insert("Current".to_owned(), fingerprint("files"));
+    store.statuses.insert(
+        "Current".to_owned(),
+        Some(("files".to_owned(), "all-MiniLM-L6-v2".to_owned(), 1, 1)),
+    );
+    store.global = Some("all-MiniLM-L6-v2".to_owned());
+    let generator = FakeGenerator {
+        available: true,
+        supported: supported("all-MiniLM-L6-v2"),
+        ..FakeGenerator::default()
+    };
+    let mut use_case = EmbedCollections::new(
+        generator,
+        store,
+        FakeClock { now: 1 },
+        FakeReranker::default(),
+    );
+
+    let events: Rc<RefCell<Vec<String>>> = Rc::default();
+    let recorded = events.clone();
+    let mut progress = move |event: kv_application::EmbedProgress| match event {
+        kv_application::EmbedProgress::Files {
+            collection,
+            completed_files,
+            total_files,
+        } => {
+            recorded.borrow_mut().push(format!(
+                "{}:{}/{}",
+                collection.display_name(),
+                completed_files,
+                total_files
+            ));
+        }
+        kv_application::EmbedProgress::Writing { collection } => {
+            recorded
+                .borrow_mut()
+                .push(format!("writing:{}", collection.display_name()));
+        }
+    };
+
+    let report = use_case.execute(EmbedScope::All, None, None, false, &mut progress)?;
+
+    assert!(events.borrow().is_empty());
+    assert_eq!(report.outcomes().len(), 2);
+
+    Ok(())
+}
+
+/// Covers: REQ-018 FR-007 — a mid-run embedding failure stops progress events
+/// and yields the Failed outcome.
+#[test]
+fn stops_progress_events_when_embedding_fails() -> Result<(), Box<dyn Error>> {
+    let mut store = FakeStore::default();
+    store.targets.push(("Notes".to_owned(), true, true));
+    store.passages.insert(
+        "Notes".to_owned(),
+        vec![
+            (1, "body".to_owned(), 0, "alpha".to_owned()),
+            (2, "body".to_owned(), 0, "boom text".to_owned()),
+            (3, "body".to_owned(), 0, "gamma".to_owned()),
+        ],
+    );
+    store
+        .fingerprints
+        .insert("Notes".to_owned(), fingerprint("files"));
+    let generator = FailOnTextGenerator {
+        inner: FakeGenerator {
+            available: true,
+            supported: supported("all-MiniLM-L6-v2"),
+            ..FakeGenerator::default()
+        },
+        fail_on_text: "boom text".to_owned(),
+    };
+    let mut use_case = EmbedCollections::new(
+        generator,
+        store,
+        FakeClock { now: 1 },
+        FakeReranker::default(),
+    );
+
+    let events: Rc<RefCell<Vec<String>>> = Rc::default();
+    let recorded = events.clone();
+    let mut progress = move |event: kv_application::EmbedProgress| match event {
+        kv_application::EmbedProgress::Files {
+            collection,
+            completed_files,
+            total_files,
+        } => {
+            recorded.borrow_mut().push(format!(
+                "{}:{}/{}",
+                collection.display_name(),
+                completed_files,
+                total_files
+            ));
+        }
+        kv_application::EmbedProgress::Writing { collection } => {
+            recorded
+                .borrow_mut()
+                .push(format!("writing:{}", collection.display_name()));
+        }
+    };
+
+    let report = use_case.execute(EmbedScope::All, None, None, false, &mut progress)?;
+
+    assert_eq!(*events.borrow(), vec!["Notes:1/3".to_owned()]);
+    assert!(matches!(
+        report.outcomes().first(),
+        Some(EmbedOutcome::Failed { collection, .. })
+            if collection.display_name() == "Notes"
+    ));
+
+    Ok(())
+}
+
+/// A generator that fails when the batch contains a designated text.
+struct FailOnTextGenerator {
+    inner: FakeGenerator,
+    fail_on_text: String,
+}
+
+impl EmbeddingGenerator for FailOnTextGenerator {
+    fn ensure_available(
+        &self,
+        model: &EmbeddingModel,
+        download: bool,
+    ) -> Result<(), EmbeddingError> {
+        self.inner.ensure_available(model, download)
+    }
+
+    fn embed(
+        &self,
+        model: &EmbeddingModel,
+        texts: &[&str],
+    ) -> Result<Vec<Embedding>, EmbeddingError> {
+        if texts.iter().any(|text| text.contains(&self.fail_on_text)) {
+            return Err(EmbeddingError::Storage(Box::new(std::io::Error::other(
+                "embedding failed",
+            ))));
+        }
+        self.inner.embed(model, texts)
+    }
 }

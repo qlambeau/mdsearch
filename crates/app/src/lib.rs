@@ -7,6 +7,7 @@ mod cli;
 mod error;
 mod graph_query;
 mod model_cache;
+mod progress;
 mod related;
 mod run;
 
