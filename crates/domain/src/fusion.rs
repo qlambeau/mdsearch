@@ -342,6 +342,36 @@ mod tests {
             prop_assert_eq!(first, second);
             prop_assert!(count <= lexical.len() + semantic.len());
         }
+
+        /// Covers: DES-014 — the neutralized expression is structurally
+        /// canonical for arbitrary free text: every whitespace-separated term
+        /// appears exactly once, in order, as a quoted phrase with embedded
+        /// quotes doubled, joined by ` AND `, so no bare FTS5 operator token
+        /// can survive.
+        #[test]
+        fn neutralized_expression_is_canonical(
+            terms in proptest::collection::vec("[^\u{0000}-\u{0020}]*", 1..10),
+        ) {
+            let terms: Vec<&str> = terms
+                .iter()
+                .filter(|term| !term.is_empty() && term.chars().all(|ch| !ch.is_whitespace()))
+                .map(String::as_str)
+                .collect();
+            prop_assume!(!terms.is_empty());
+            let query = terms.join(" ");
+            prop_assert!(
+                free_text_to_fts5(&query).is_some(),
+                "a query with at least one term maps to an expression"
+            );
+            let expression = free_text_to_fts5(&query).unwrap_or_default();
+
+            let parts: Vec<&str> = expression.split(" AND ").collect();
+            prop_assert_eq!(parts.len(), terms.len());
+            for (term, part) in terms.iter().zip(&parts) {
+                let expected = format!("\"{}\"", term.replace('"', "\"\""));
+                prop_assert_eq!(*part, expected);
+            }
+        }
     }
 
     /// Guards: the fused rank exposes its key and score.

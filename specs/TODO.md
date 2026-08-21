@@ -59,6 +59,8 @@ Legend for the **Kind** column:
 
 - **Kind:** Behavior inconsistency
 - **Priority:** High (user-visible, surprising)
+- **Status:** `PROMOTED` — committed as EPIC-008 in `PRD-001` (US-014,
+  `specs/014-unify-query-semantics`); resolved decision recorded as DEC-013
 - **Locations:**
   - `crates/application/src/hybrid_search.rs:199` — hybrid search pre-processes
     the query: `let fts5_query = free_text_to_fts5(query)…`
@@ -181,6 +183,8 @@ slice: fail fast on unsupported-dimension models.
 
 - **Kind:** Robustness / correctness
 - **Priority:** Medium
+- **Status:** `PROMOTED` — folded into EPIC-008 in `PRD-001` (US-014,
+  `specs/014-unify-query-semantics`)
 - **Locations:**
   - `crates/adapters/store-sqlite/src/lib.rs:1613-1623` —
     `search_query_failure` classifies an error as `InvalidQuery` only when the
@@ -409,17 +413,307 @@ resolution, keep the disambiguation contract, and add a store regression test.
 
 ---
 
+## OBS-008 — Destroying a collection leaves orphaned records in child and virtual tables
+
+- **Kind:** Robustness / correctness
+- **Priority:** Critical (data leakage, orphaned records)
+- **Locations:**
+  - `crates/adapters/store-sqlite/src/lib.rs:314-331` — `destroy_collection`
+    executes only `DELETE FROM collections WHERE name_key = ?1`
+  - `crates/adapters/store-sqlite/src/lib.rs:130-185,215-242` — schema declares
+    `REFERENCES collections(collection_id) ON DELETE CASCADE` on child tables,
+    but SQLite default connection mode disables foreign key enforcement
+  - `crates/adapters/store-sqlite/src/lib.rs:150-153,180-185` — virtual tables
+    (`passages` FTS5 and `embeddings` sqlite-vector) cannot declare SQLite foreign
+    keys and have no automated cascade
+
+### Observation
+
+`SqliteCollectionStore::destroy_collection` executes a single SQL statement:
+`DELETE FROM collections WHERE name_key = ?1`. Because SQLite does not enable
+foreign key enforcement by default on new database connections (`PRAGMA
+foreign_keys = ON;` is not executed upon connection opening), the foreign key
+cascade delete actions are not executed by SQLite. Furthermore, virtual tables
+(`passages` and `embeddings`) cannot declare foreign keys in SQLite.
+
+As a consequence, destroying a collection leaves its stored files in `files`,
+full-text rows in `passages`, mapping rows in `passage_files`, vector rows in
+`embeddings`, graph nodes in `nodes`, graph edges in `edges`, and state records
+in `lexical_index_state`, `semantic_index_state`, and `graph_state` orphaned
+permanently in the database.
+
+### Impact
+
+- Orphaned records permanently consume storage space in the SQLite database.
+- Queries operating across all collections (`SearchScope::All`) or joining
+  against passages/embeddings can match against orphaned data from destroyed
+  collections.
+- If a newly created collection happens to receive the same `collection_id` as a
+  previously destroyed collection, it inherits the old collection's orphaned
+  files, passages, embeddings, and graph nodes/edges.
+
+### Open questions (owner decision required)
+
+1. Should `destroy_collection` execute an explicit multi-table transactional
+   delete (clearing `embeddings`, `passages` via `passage_files`, `passage_files`,
+   `files`, `nodes`, `edges`, state tables, and `collections`) to guarantee
+   complete cleanup?
+2. Should `SqliteCollectionStore::open` and related opening helpers enable
+   `PRAGMA foreign_keys = ON;` on all SQLite connections by default (see
+   OBS-011)?
+
+### Candidate epic direction
+
+"Collection lifecycle data integrity" — complete transactional cascade deletion
+of all child tables, virtual tables, and index states on `destroy_collection`,
+with regression integration tests verifying database table emptiness after
+destroy.
+
+---
+
+## OBS-009 — Knowledge graph extraction does not support wikilinks (`[[note]]` and `[[note|label]]`)
+
+- **Kind:** Behavior inconsistency
+- **Priority:** High (standard markdown vault feature)
+- **Locations:**
+  - `crates/domain/src/graph.rs:349,489-514` — `inline_markdown_links` searches
+    only for standard markdown link syntax matching `](` with `.md` extension
+  - `crates/domain/src/graph.rs:416-465` — `resolve_file` resolves relative
+    paths, parent directory joins, and bare basename matches
+
+### Observation
+
+Knowledge graph extraction parses only standard Markdown links of the form
+`[label](target.md)`. The primary target domain for `mdsearch` is "developer
+markdown knowledge vaults" (such as Obsidian, Logseq, Foam, Dendron, and QMD
+notes), where intra-vault cross-references are predominantly written using
+wikilinks syntax: `[[target]]`, `[[target|label]]`, `[[path/target#heading]]`, or
+`[[target#heading|label]]`. None of these wikilinks are recognized by
+`inline_markdown_links`, resulting in zero `LINKS_TO` graph edges being
+generated for wikilink-based vaults.
+
+### Impact
+
+- Entity graphs extracted from typical Obsidian/LLM-wiki vaults remain largely
+  disconnected, missing `LINKS_TO` edges.
+- `--related` flags and `graph neighbors` queries miss document relationships
+  for vaults that rely on wikilinks.
+
+### Open questions (owner decision required)
+
+1. Should wikilink extraction be supported in addition to standard
+   `[label](target.md)` markdown links in `extract_graph`?
+2. How should piped aliases in wikilinks (e.g. `[[target|alias label]]`) be
+   treated: as a `LINKS_TO` edge to `target` only, or should `alias label` also be
+   registered as an `Alias` node with an `ALIAS_OF` edge?
+3. Should header fragments in wikilinks (e.g. `[[target#Section Name]]`) be
+   stripped to resolve the destination file, matching `strip_link_target`
+   behavior?
+
+### Candidate epic direction
+
+"Wikilink graph extraction" — support `[[target]]`, `[[target|label]]`, and
+`[[target#heading]]` in domain graph extraction, resolve them against known
+collection files via `resolve_file`, and add scenario coverage to
+`012-entity-graph`.
+
+---
+
+## OBS-010 — Code fence unaware paragraph splitting and inline link extraction
+
+- **Kind:** Robustness / correctness
+- **Priority:** Medium
+- **Locations:**
+  - `crates/domain/src/passage.rs:269-302` — `split_paragraphs` splits body text
+    on any blank line (`line.trim().is_empty()`)
+  - `crates/domain/src/graph.rs:489-514` — `inline_markdown_links` scans raw
+    content bytes for `](` without checking for code fences
+
+### Observation
+
+1. `split_paragraphs` divides document bodies strictly by blank lines without
+   tracking whether the lines occur inside a fenced code block (` ``` ` or
+   `~~~`). A code snippet containing internal empty lines is chopped into
+   multiple fragmented passages; subsequent chunks lose the enclosing code
+   fence and language identifier context.
+2. `inline_markdown_links` scans raw bytes for `](` without ignoring code fences
+   or inline code spans (e.g., `` `[link](target.md)` `` or example markdown in a
+   code block). If a file matching the example target exists in the collection,
+   a phantom `LINKS_TO` edge is created.
+
+### Impact
+
+- Code snippets in technical vaults are fragmented across multiple search
+  passages, degrading semantic retrieval quality and search display readability.
+- Documentation vaults that mention markdown link syntax in code examples can
+  generate false-positive graph connections.
+
+### Open questions
+
+1. Should `split_paragraphs` track fenced code blocks and keep an entire fenced
+   block as a single passage even if it contains blank lines?
+2. Should link extraction ignore text inside fenced code blocks and inline
+   backticks?
+
+### Candidate epic direction
+
+"Code-fence aware passage segmentation and link extraction" — maintain fence
+state (` ``` `, `~~~`) during paragraph splitting and link extraction,
+preserving code block unity and preventing phantom edge creation.
+
+---
+
+## OBS-011 — SQLite database connections lack production PRAGMA configurations
+
+- **Kind:** Scalability / performance
+- **Priority:** Medium
+- **Locations:**
+  - `crates/adapters/store-sqlite/src/lib.rs:55-83` — `SqliteCollectionStore::open`
+    and `open_existing`
+  - `crates/adapters/store-sqlite/src/lib.rs:100-112` —
+    `SqliteFileStore::open_for_ingestion`
+  - `crates/adapters/store-sqlite/src/lib.rs:727-743` —
+    `SqliteLexicalIndexStore::open`
+  - `crates/adapters/store-sqlite/src/lib.rs:815-831` —
+    `SqliteLexicalSearchStore::open`
+  - `crates/adapters/store-sqlite/src/lib.rs:996-1017` —
+    `SqliteSemanticIndexStore::open_for_embedding`
+  - `crates/adapters/store-sqlite/src/lib.rs:1426-1442` —
+    `SqliteFileRetrievalStore::open`
+  - `crates/adapters/store-sqlite/src/graph.rs:17-33` — `SqliteGraphStore::open`
+  - `crates/adapters/store-sqlite/src/hybrid.rs:21-39` —
+    `SqliteHybridSearchStore::open`
+
+### Observation
+
+SQLite database connections across all adapter entry points are opened with
+default SQLite engine settings. Specifically:
+- `PRAGMA foreign_keys = ON;` is never executed (see OBS-008).
+- `PRAGMA journal_mode = WAL;` is not enabled, leaving SQLite in rollback journal
+  `DELETE` mode.
+- `PRAGMA synchronous = NORMAL;` and `PRAGMA busy_timeout` are not configured.
+
+### Impact
+
+- Rollback journal mode requires exclusive database file locks and full
+  synchronous disk flushes during indexing updates, which reduces write
+  throughput and blocks concurrent CLI reads.
+- Foreign key constraints declared in `CREATE TABLE` DDL are ignored at runtime.
+
+### Open questions
+
+1. Should standard SQLite production PRAGMAs (`foreign_keys = ON`,
+   `journal_mode = WAL`, `synchronous = NORMAL`, `busy_timeout = 5000`) be
+   executed uniformly whenever a database connection is opened or initialized?
+2. Does WAL mode introduce any multi-file artifact concerns for single-file
+   database management (WAL and SHM sidecar files exist while connections are
+   active)?
+
+### Candidate epic direction
+
+"SQLite connection PRAGMAs and concurrency configuration" — centralize
+connection initialization to set WAL mode, synchronous=NORMAL, foreign keys,
+and busy timeout on all open paths.
+
+---
+
+## OBS-012 — Evaluation dataset scale is smaller than the target in ADR-004
+
+- **Kind:** Maintainability / DRY
+- **Priority:** Low–Medium
+- **Locations:**
+  - `xtask/src/eval/mod.rs` — evaluation harness runner
+  - `tests/fixtures/eval/corpus.jsonl` — test corpus (32 documents)
+  - `tests/fixtures/eval/queries.jsonl` — test queries (32 queries)
+  - `tests/fixtures/eval/qrels.jsonl` — relevance judgments (78 judgments)
+  - `specs/adr/ADR-004.md` — Golden dataset strategy specification
+
+### Observation
+
+`ADR-004` outlines a comprehensive golden dataset strategy with a 100–300 query
+suite spanning curated queries, synthetic queries, and hard negatives over a
+representative vault corpus (100–5,000 document scale). The current evaluation
+dataset in `tests/fixtures/eval/` is a 32-document, 32-query fixture. While the
+suite passes with 100% metrics (Recall@5 = 1.0, MRR@5 = 1.0, NDCG@5 = 1.0),
+the small corpus size does not sufficiently stress-test ranking discrimination,
+RRF fusion parameter sensitivity ($k=60$), or cross-encoder re-ranker
+effectiveness under real vault conditions.
+
+### Impact
+
+- Perfect 1.0 scores on the minimal 32-query set may mask subtle ranking
+  regressions or suboptimal fusion weights that would appear on larger, noisier
+  collections.
+
+### Open questions
+
+1. When should the evaluation corpus be expanded to the 100–300 query scale
+   specified in ADR-004?
+2. Should synthetic query generation tooling be included in `xtask` to assist in
+   generating and validating large query sets?
+
+### Candidate epic direction
+
+"Evaluation fixture expansion" — populate `tests/fixtures/eval/` with the full
+100–300 query suite, hard negatives, and graded relevance judgments per ADR-004.
+
+---
+
+## OBS-013 — Ephemeral Tokio runtime creation in the synchronous `context` CLI command
+
+- **Kind:** Maintainability / DRY
+- **Priority:** Low
+- **Locations:**
+  - `crates/app/src/run.rs:431-434` — `tokio::runtime::Builder::new_current_thread().build()`
+    inside `context` command
+  - `crates/app/src/graph_query.rs:44,70` — async GraphQL resolvers with
+    `#[allow(clippy::unused_async)]`
+
+### Observation
+
+`mdsearch context '<query>'` builds a new single-threaded Tokio runtime on each
+invocation to execute the `async_graphql` schema via
+`runtime.block_on(schema.execute(query))`. However, the underlying GraphQL
+resolvers in `crates/app/src/graph_query.rs` are entirely synchronous
+mutex-guarded calls against `SqliteGraphStore` and contain no actual
+asynchronous I/O (requiring `#[allow(clippy::unused_async)]`).
+
+### Impact
+
+- Minor runtime bootstrapping overhead per `context` invocation.
+- Slight architectural complexity from running a synchronous store through an
+  asynchronous executor.
+
+### Open questions
+
+1. Should `async-graphql`'s in-process execution remain async for future
+   extensibility (e.g. if async graph loaders or streaming are added), or be
+   simplified?
+
+### Candidate epic direction
+
+"GraphQL query layer cleanup" — document runtime semantics and retain async
+execution for future compatibility.
+
+---
+
 ## Provisional Epic Mapping (for v0.2.0 planning)
 
 | OBS | Candidate epic (working title) | Kind | Suggested scope for v0.2.0 |
 | --- | --- | --- | --- |
-| OBS-001 | Unify query semantics across lexical and hybrid search | Product-visible behavior | Likely in-scope; needs owner decision on intended semantics |
+| OBS-001 | Unify query semantics across lexical and hybrid search | Product-visible behavior | `PROMOTED` to EPIC-008 (US-014) |
 | OBS-002 | Embedding model dimension support (or fail-fast on unsupported dims) | Product-visible behavior + schema | Likely in-scope; minimum viable = fail fast at model selection |
-| OBS-003 | Deterministic FTS5 query validation and error classification | Robustness | Fold into OBS-001 epic |
+| OBS-003 | Deterministic FTS5 query validation and error classification | Robustness | `PROMOTED` — folded into EPIC-008 (US-014) |
 | OBS-004 | Index-time passage positions (drop per-result file re-read) | Performance | Candidate; validate against latency targets (PRD-001 §3/§5) |
 | OBS-005 | SQLite adapter consolidation (shared helpers/SQL) | Maintainability | Candidate; parkable if capacity is tight |
 | OBS-006 | Graph store strictness (no silent kind/relation fallback) | Robustness | Small; natural pairing with OBS-005 |
 | OBS-007 | Retrieval queries fetch only required columns | Performance | Fold into OBS-004/OBS-005 |
+| OBS-008 | Collection lifecycle data integrity (cascade destroy child/virtual tables) | Robustness / correctness | High priority; critical data integrity fix |
+| OBS-009 | Wikilink graph extraction (`[[note]]` and `[[note|label]]`) | Behavior inconsistency | High priority; standard markdown vault support |
+| OBS-010 | Code-fence aware passage segmentation and link extraction | Robustness / correctness | Candidate; preserves code block integrity |
+| OBS-011 | SQLite connection PRAGMAs and concurrency configuration | Scalability / performance | Candidate; pair with OBS-008 and OBS-005 |
+| OBS-012 | Evaluation fixture expansion (100–300 query suite per ADR-004) | Maintainability / DRY | Parkable / follow-up release |
+| OBS-013 | GraphQL query layer cleanup | Maintainability / DRY | Low priority / cleanup |
 
 ## Decisions Still Open
 
@@ -430,8 +724,9 @@ resolution, keep the disambiguation contract, and add a store regression test.
    `PRD-001`; a large multi-epic sub-system with its own personas/journeys →
    new PRD. None of the entries above obviously introduces new personas or a
    product pivot, which leans toward an `PRD-001` update, but the owner decides.
-2. **Epic selection** — which of the seven observations become committed epics
-   in v0.2.0, and which are parked. The provisional mapping above is a
-   suggestion only.
+2. **Epic selection** — OBS-001 (with OBS-003 folded in) is committed as
+   EPIC-008 / US-014; the remaining observations await epic selection. The
+   provisional mapping above is a suggestion only.
 3. **Severity confirmation** — each entry records a proposed priority; confirm
    or adjust during epic refinement.
+

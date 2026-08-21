@@ -242,21 +242,30 @@ fn search_matches_an_exact_phrase() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Covers: FR-006 — a malformed query fails with a clear error.
+/// Covers: REQ-014 FR-002 — FTS5 operator characters in a query match
+/// literally; a query that used to fail as malformed now succeeds.
 #[test]
-fn search_fails_clearly_on_a_malformed_query() -> Result<(), Box<dyn Error>> {
+fn search_matches_operator_characters_literally() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
     let a = home.path().join("a.md");
+    let b = home.path().join("b.md");
     create(home.path(), "Notes")?;
-    add_and_update(home.path(), "Notes", &a, "borrowing")?;
+    add_and_update(home.path(), "Notes", &a, "a AND b semantics")?;
+    add_and_update(home.path(), "Notes", &b, "borrowing only")?;
 
-    let error = run(["mdsearch", "search", "a AND"], home.path())
-        .err()
-        .ok_or_else(|| std::io::Error::other("a malformed query should fail"))?;
+    let output = run(["mdsearch", "search", "a AND"], home.path())?;
 
     assert!(
-        error.to_string().contains("invalid query"),
-        "unexpected error: {error}"
+        output.contains("a AND b semantics"),
+        "unexpected output: {output}"
+    );
+    assert!(
+        !output.contains("borrowing only"),
+        "unexpected output: {output}"
+    );
+    assert!(
+        output.contains("1 match(es)"),
+        "unexpected output: {output}"
     );
 
     Ok(())
@@ -463,22 +472,31 @@ fn search_json_emits_empty_results_for_no_match() -> Result<(), Box<dyn Error>> 
     Ok(())
 }
 
-/// Covers: FR-008 — a malformed query fails in JSON mode without emitting JSON.
+/// Covers: REQ-014 FR-002 — operator characters match literally in JSON mode,
+/// with the same passage set as the human output.
 #[test]
-fn search_json_fails_clearly_on_a_malformed_query() -> Result<(), Box<dyn Error>> {
+fn search_json_matches_operator_characters_literally() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
     let a = home.path().join("a.md");
+    let b = home.path().join("b.md");
     create(home.path(), "Notes")?;
-    add_and_update(home.path(), "Notes", &a, "borrowing")?;
+    add_and_update(home.path(), "Notes", &a, "a AND b semantics")?;
+    add_and_update(home.path(), "Notes", &b, "borrowing only")?;
 
-    let error = run(["mdsearch", "search", "a AND", "--json"], home.path())
-        .err()
-        .ok_or_else(|| std::io::Error::other("a malformed query should fail"))?;
+    let output = run(["mdsearch", "search", "a AND", "--json"], home.path())?;
+    let value: serde_json::Value = serde_json::from_str(&output)?;
+    let results = value
+        .get("results")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| std::io::Error::other("results must be an array"))?;
 
-    assert!(
-        error.to_string().contains("invalid query"),
-        "unexpected error: {error}"
-    );
+    assert_eq!(results.len(), 1);
+    let text = results
+        .first()
+        .and_then(|result| result.get("text"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| std::io::Error::other("first result must carry text"))?;
+    assert_eq!(text, "a AND b semantics");
 
     Ok(())
 }

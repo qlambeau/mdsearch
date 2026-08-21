@@ -4,7 +4,7 @@ title: "Search the lexical index for ranked passages requirements"
 type: feature-requirements
 status: implemented
 created: 2026-08-17
-updated: 2026-08-17
+updated: 2026-08-21
 owner: TBD
 parent: US-007
 related:
@@ -48,7 +48,7 @@ passages into an LLM prompt.
 
 | Interaction | Inputs | Outputs | Validation |
 | --- | --- | --- | --- |
-| Search all collections | `QUERY`, optional `--limit N`, optional `--database PATH` | Ranked passage blocks plus a total-count summary when matches exist; empty output when none | Query is non-empty and valid FTS5 syntax; `--limit` within 1..=100 |
+| Search all collections | `QUERY`, optional `--limit N`, optional `--database PATH` | Ranked passage blocks plus a total-count summary when matches exist; empty output when none | Query is non-empty literal free text; `--limit` within 1..=100 |
 | Search one collection | `QUERY`, `--collection NAME`, optional `--limit N`, optional `--database PATH` | Ranked passage blocks restricted to the named collection | `NAME` matched case-insensitively against an existing, built collection; query and limit valid |
 
 ## Functional Requirements
@@ -60,7 +60,7 @@ passages into an LLM prompt.
 | FR-003 | `--limit N` shall cap the number of displayed results, defaulting to 10 and accepting 1 through 100 inclusive; out-of-range values shall fail. | Must | US-007; Cap results with --limit and report the total; Reject an out-of-range --limit |
 | FR-004 | Results shall be ranked by the FTS5 BM25 score, highest first. | Must | US-007; Search all collections returns ranked passages |
 | FR-005 | Equal-score results shall be ordered by collection name, then file path, then passage position. | Must | US-007; Search all collections returns ranked passages |
-| FR-006 | The query shall accept full FTS5 match syntax; an empty or whitespace-only query shall fail, and a malformed query shall fail with a clear error rather than a crash. | Must | US-007; Match an exact phrase; Fail clearly on a malformed query; Fail on an empty query |
+| FR-006 | The query shall be literal free text: whitespace-separated terms are quoted and AND-joined so FTS5 operator characters match literally; an empty or whitespace-only query shall fail. | Must | US-007; Match passages containing all query terms; Treat FTS5 operator characters as literal text; Fail on an empty query |
 | FR-007 | When searching all collections, collections with an unbuilt index shall be skipped silently. | Must | US-007; Skip unbuilt collections when searching all |
 | FR-008 | `--collection` naming an unknown collection shall fail and report the collection was not found. | Must | US-007; Report a missing collection for --collection |
 | FR-009 | `--collection` naming a collection with an unbuilt index shall fail and report that the index is not built. | Must | US-007; Report an unbuilt index for --collection |
@@ -81,7 +81,7 @@ passages into an LLM prompt.
 | Condition | Expected behavior | User-visible result |
 | --- | --- | --- |
 | Empty or whitespace-only query | Fail without searching | A clear error |
-| Malformed query (e.g., `a AND`) | Fail without searching | A clear error naming the query problem |
+| Query containing FTS5 operator characters (e.g., `a AND`) | Match literally | Only passages containing all literal terms |
 | `--limit` outside 1..=100 | Fail | A clear error |
 | `--collection` does not match a collection | Fail | Output communicates the collection was not found |
 | `--collection` matches a collection with an unbuilt index | Fail | Output communicates the index is not built |

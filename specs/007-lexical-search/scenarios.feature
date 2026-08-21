@@ -46,15 +46,16 @@ Feature: Search the lexical index for ranked passages
     When I run `mdsearch search borrowing --limit 200`
     Then the operation fails
 
-  Scenario: Match an exact phrase
+  Scenario: Match passages containing all query terms
     Given a built collection has passages "rust ownership" and "rust borrow"
     When I run `mdsearch search "rust ownership"`
-    Then only the passage containing the exact phrase is returned
+    Then only the passage containing all terms "rust" and "ownership" is returned
 
-  Scenario: Fail clearly on a malformed query
+  Scenario: Treat FTS5 operator characters as literal text
+    Given a built collection has a passage "a AND b" and a passage "borrowing only"
     When I run `mdsearch search "a AND"`
-    Then the operation fails
-    And the output communicates a query error
+    Then the search succeeds
+    And only passages containing the literal terms "a" and "AND" are returned
 
   Scenario: Fail on an empty query
     When I run `mdsearch search ""`

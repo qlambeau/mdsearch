@@ -65,6 +65,59 @@ fn hybrid_fails_on_an_empty_query() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Covers: REQ-014 FR-002 — FTS5 operator characters match literally in the
+/// hybrid lexical leg (offline-reachable without semantic assets).
+#[test]
+fn hybrid_matches_operator_characters_literally() -> Result<(), Box<dyn Error>> {
+    let home = tempdir()?;
+    let a = home.path().join("a.md");
+    let b = home.path().join("b.md");
+    create(home.path(), "Notes")?;
+    add_and_update(home.path(), "Notes", &a, "a AND b semantics")?;
+    add_and_update(home.path(), "Notes", &b, "borrowing only")?;
+
+    let output = run(["mdsearch", "hybrid", "a AND"], home.path())?;
+
+    assert!(
+        output.contains("a AND b semantics"),
+        "unexpected output: {output}"
+    );
+    assert!(
+        !output.contains("borrowing only"),
+        "unexpected output: {output}"
+    );
+
+    Ok(())
+}
+
+/// Covers: REQ-014 FR-004 — the identical query string returns the same
+/// passages on `search` and `hybrid` against the same collection state.
+#[test]
+fn search_and_hybrid_return_the_same_passages_for_the_same_query() -> Result<(), Box<dyn Error>> {
+    let home = tempdir()?;
+    let a = home.path().join("a.md");
+    let b = home.path().join("b.md");
+    create(home.path(), "Notes")?;
+    add_and_update(home.path(), "Notes", &a, "a AND b semantics")?;
+    add_and_update(home.path(), "Notes", &b, "borrowing only")?;
+
+    let search = run(["mdsearch", "search", "a AND"], home.path())?;
+    let hybrid = run(["mdsearch", "hybrid", "a AND"], home.path())?;
+
+    for output in [&search, &hybrid] {
+        assert!(
+            output.contains("a AND b semantics"),
+            "unexpected output: {output}"
+        );
+        assert!(
+            !output.contains("borrowing only"),
+            "unexpected output: {output}"
+        );
+    }
+
+    Ok(())
+}
+
 /// Covers: REQ-011 FR-013 — a missing database fails without creating a file.
 #[test]
 fn hybrid_reports_a_missing_database_without_creating_it() -> Result<(), Box<dyn Error>> {

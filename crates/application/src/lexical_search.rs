@@ -1,3 +1,5 @@
+use kv_domain::free_text_to_fts5;
+
 use crate::{LexicalSearchStore, SearchError, SearchResultSet, SearchScope};
 
 /// Searches the built lexical index for ranked passages.
@@ -17,6 +19,10 @@ where
 
     /// Returns ranked passages matching `query` within `scope`.
     ///
+    /// The query is literal free text: it is mapped to a quoted, AND-joined
+    /// FTS5 expression so operator characters match literally, identically to
+    /// the hybrid command.
+    ///
     /// # Errors
     ///
     /// Returns an empty-query error when the query is empty or whitespace-only,
@@ -31,6 +37,8 @@ where
             return Err(SearchError::EmptyQuery);
         }
 
-        Ok(self.store.search(query, limit, scope)?)
+        let fts5_query = free_text_to_fts5(query).ok_or(SearchError::EmptyQuery)?;
+
+        Ok(self.store.search(&fts5_query, limit, scope)?)
     }
 }

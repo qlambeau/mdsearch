@@ -1610,16 +1610,14 @@ fn retrieval_storage_failure(error: impl Error + Send + Sync + 'static) -> FileR
     FileRetrievalStoreError::Storage(Box::new(error))
 }
 
-/// Maps a search execution failure, distinguishing an FTS5 query problem.
+/// Maps a search execution failure to a storage error.
+///
+/// The query expression is produced by the domain free-text mapper and is
+/// valid FTS5 by construction, so query-path execution failures are storage
+/// failures. `InvalidQuery` remains in the error enum as defense-in-depth but
+/// is never constructed from engine error text (ADR-009).
 fn search_query_failure(error: rusqlite::Error) -> SearchStoreError {
-    match &error {
-        rusqlite::Error::SqliteFailure(_, Some(message)) if message.contains("fts5") => {
-            SearchStoreError::InvalidQuery {
-                message: message.clone(),
-            }
-        }
-        _ => SearchStoreError::Storage(Box::new(error)),
-    }
+    SearchStoreError::Storage(Box::new(error))
 }
 
 /// Computes a passage's position from its stored byte offset and file content.

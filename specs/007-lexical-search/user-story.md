@@ -4,7 +4,7 @@ title: "Search the lexical index for ranked passages"
 type: user-story
 status: implemented
 created: 2026-08-17
-updated: 2026-08-17
+updated: 2026-08-21
 owner: TBD
 parent: PRD-001
 epic: EPIC-003
@@ -37,11 +37,10 @@ positions remain a later EPIC-006 slice).
 - `--limit` defaults to 10 and accepts values from 1 through 100 inclusive.
 - `--collection NAME` restricts the search to one collection, matched
   case-insensitively; without it, every collection is searched.
-- The query uses full FTS5 match syntax: bare terms, `"quoted phrases"`,
-  `prefix*`, and `AND` / `OR` / `NOT` operators.
+- The query is literal free text: whitespace-separated terms are quoted and
+  AND-joined, so FTS5 operator characters (`AND`, `OR`, `NOT`, `prefix*`,
+  quotes, parentheses, hyphens) are treated as literal text, never as syntax.
 - An empty or whitespace-only query fails with a clear error.
-- A malformed query fails with a clear error naming the problem; it is never a
-  crash.
 - Results are ranked by the FTS5 BM25 score, highest first.
 - Equal scores are ordered deterministically by collection name, then file
   path, then passage position.
@@ -72,8 +71,8 @@ positions remain a later EPIC-006 slice).
 | EX-005 | A collection's index was never built alongside built collections | I run `mdsearch search borrowing` | The unbuilt collection is skipped and matches from the built ones are returned |
 | EX-006 | `--limit 5` is supplied | I run `mdsearch search borrowing --limit 5` | At most 5 passage blocks are shown and the summary reports the total count |
 | EX-007 | `--limit 200` is supplied | I run `mdsearch search borrowing --limit 200` | The command fails and reports the limit is out of range |
-| EX-008 | A query uses `"rust ownership"` | I run `mdsearch search "rust ownership"` | Only passages containing the exact phrase are returned |
-| EX-009 | A query is malformed, for example `a AND` | I run `mdsearch search "a AND"` | The command fails with a clear error naming the query problem |
+| EX-008 | A query uses `rust ownership` | I run `mdsearch search "rust ownership"` | Only passages containing all terms are returned |
+| EX-009 | A query contains operator characters, for example `a AND` | I run `mdsearch search "a AND"` | The terms are matched literally; passages containing `a` and `AND` are returned |
 | EX-010 | A query is empty | I run `mdsearch search ""` | The command fails with a clear error |
 | EX-011 | No passage matches the query | I run `mdsearch search zzzznotaword` | The output is empty |
 | EX-012 | No database exists at the selected path | I run `mdsearch search borrowing --database PATH` | The command fails and reports the database does not exist |
@@ -87,8 +86,9 @@ positions remain a later EPIC-006 slice).
 - Unknown collections and unbuilt indexes targeted by `--collection` fail with
   clear errors.
 - Searching all collections skips unbuilt indexes silently.
-- Full FTS5 match syntax is accepted; empty and malformed queries fail with
-  clear errors, never a crash.
+- The query is literal free text: terms are quoted and AND-joined so FTS5
+  operator characters match literally; an empty or whitespace-only query fails
+  with a clear error, never a crash.
 - Equal-score results are ordered deterministically by collection name, file
   path, then passage position.
 - A summary line reports the total match count when results exist; no matches
@@ -100,7 +100,7 @@ positions remain a later EPIC-006 slice).
 ### In Scope
 
 - Ranking and retrieving passages from the built lexical index.
-- Full FTS5 query syntax with clear malformed-query errors.
+- Literal free-text query interpretation with inert FTS5 operator characters.
 - Result limiting, collection restriction, deterministic ordering, and the
   total-count summary.
 - Human-readable ranked-passage output.
