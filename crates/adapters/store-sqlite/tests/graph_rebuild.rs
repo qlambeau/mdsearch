@@ -103,6 +103,50 @@ fn reconcile_builds_graph_nodes_and_edges() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn reconcile_builds_wikilink_edges() -> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let database_path = directory.path().join("collections.db");
+    let collection = name()?;
+    let mut collections = SqliteCollectionStore::open(&database_path)?;
+    collections.create_collection(&collection, Timestamp::from_unix_seconds(1_700_000_000))?;
+
+    let a = directory.path().join("a.md");
+    let b = directory.path().join("b.md");
+    let case = directory.path().join("Case.md");
+    let mut store = SqliteFileStore::open_for_ingestion(&database_path)?;
+    upsert_and_reconcile(
+        &mut store,
+        &collection,
+        &[
+            (
+                a.as_path(),
+                b"[[b]] [[b#Lifetimes|Label]] [[case]] [[missing]] [[a]]\n",
+            ),
+            (b.as_path(), b"body\n"),
+            (case.as_path(), b"body\n"),
+        ],
+    )?;
+
+    let connection = Connection::open(&database_path)?;
+    assert_eq!(
+        edge_count(&connection, "LINKS_TO", path_str(&a)?, path_str(&b)?)?,
+        1
+    );
+    assert_eq!(
+        edge_count(&connection, "LINKS_TO", path_str(&a)?, path_str(&case)?)?,
+        1
+    );
+    let total_links: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM edges WHERE relation = 'LINKS_TO'",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(total_links, 2);
+
+    Ok(())
+}
+
+#[test]
 fn reconcile_skips_unresolved_related_reference() -> Result<(), Box<dyn Error>> {
     let directory = tempdir()?;
     let database_path = directory.path().join("collections.db");

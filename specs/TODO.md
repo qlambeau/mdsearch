@@ -479,6 +479,9 @@ destroy.
 
 - **Kind:** Behavior inconsistency
 - **Priority:** High (standard markdown vault feature)
+- **Status:** `PROMOTED` — committed as EPIC-013 in `PRD-001` (US-019,
+  `specs/019-wikilink-graph-extraction`); resolved decision recorded as
+  DEC-018
 - **Locations:**
   - `crates/domain/src/graph.rs:349,489-514` — `inline_markdown_links` searches
     only for standard markdown link syntax matching `](` with `.md` extension
@@ -906,7 +909,7 @@ unchanged, and cover the callback contract with unit tests.
 | OBS-006 | Graph store strictness (no silent kind/relation fallback) | Robustness | Small; natural pairing with OBS-005 |
 | OBS-007 | Retrieval queries fetch only required columns | Performance | Fold into OBS-004/OBS-005 |
 | OBS-008 | Collection lifecycle data integrity (cascade destroy child/virtual tables) | Robustness / correctness | `PROMOTED` to EPIC-010 (US-016) |
-| OBS-009 | Wikilink graph extraction (`[[note]]` and `[[note|label]]`) | Behavior inconsistency | High priority; standard markdown vault support |
+| OBS-009 | Wikilink graph extraction (`[[note]]` and `[[note|label]]`) | Behavior inconsistency | `PROMOTED` to EPIC-013 (US-019) |
 | OBS-010 | Code-fence aware passage segmentation and link extraction | Robustness / correctness | Candidate; preserves code block integrity |
 | OBS-011 | SQLite connection PRAGMAs and concurrency configuration | Scalability / performance | Candidate; pair with OBS-008 and OBS-005 |
 | OBS-012 | Evaluation fixture expansion (100–300 query suite per ADR-004) | Maintainability / DRY | Parkable / follow-up release |
