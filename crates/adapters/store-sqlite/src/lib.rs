@@ -79,7 +79,23 @@ impl SqliteCollectionStore {
 
         let connection = Connection::open(path).map_err(database_unavailable)?;
 
+        register_vector_extension(&connection).map_err(storage_failure)?;
+
         Ok(Self { connection })
+    }
+}
+
+impl SqliteCollectionStore {
+    /// Returns whether the `embeddings` vector table exists in the database.
+    fn embeddings_table_exists(&self) -> Result<bool, rusqlite::Error> {
+        self.connection.query_row(
+            "SELECT EXISTS(
+                    SELECT 1 FROM sqlite_master
+                    WHERE type = 'table' AND name = 'embeddings'
+                )",
+            [],
+            |row| row.get(0),
+        )
     }
 }
 
@@ -315,8 +331,79 @@ impl CollectionStore for SqliteCollectionStore {
         &mut self,
         name: &CollectionName,
     ) -> Result<CollectionName, CollectionStoreError> {
-        let display_name = self
+        let collection_id = self
             .connection
+            .query_row(
+                "SELECT collection_id FROM collections WHERE name_key = ?1 LIMIT 1",
+                params![name.name_key()],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(storage_failure)?
+            .ok_or(CollectionStoreError::CollectionNotFound)?;
+
+        let embeddings_table_exists = self.embeddings_table_exists().map_err(storage_failure)?;
+        let transaction = self.connection.transaction().map_err(storage_failure)?;
+
+        if embeddings_table_exists {
+            transaction
+                .execute(
+                    "DELETE FROM embeddings WHERE collection_id = ?1",
+                    params![collection_id],
+                )
+                .map_err(storage_failure)?;
+        }
+        transaction
+            .execute(
+                "DELETE FROM passages WHERE rowid IN (
+                     SELECT passage_rowid FROM passage_files WHERE collection_id = ?1
+                 )",
+                params![collection_id],
+            )
+            .map_err(storage_failure)?;
+        transaction
+            .execute(
+                "DELETE FROM passage_files WHERE collection_id = ?1",
+                params![collection_id],
+            )
+            .map_err(storage_failure)?;
+        transaction
+            .execute(
+                "DELETE FROM files WHERE collection_id = ?1",
+                params![collection_id],
+            )
+            .map_err(storage_failure)?;
+        transaction
+            .execute(
+                "DELETE FROM edges WHERE collection_id = ?1",
+                params![collection_id],
+            )
+            .map_err(storage_failure)?;
+        transaction
+            .execute(
+                "DELETE FROM nodes WHERE collection_id = ?1",
+                params![collection_id],
+            )
+            .map_err(storage_failure)?;
+        transaction
+            .execute(
+                "DELETE FROM graph_state WHERE collection_id = ?1",
+                params![collection_id],
+            )
+            .map_err(storage_failure)?;
+        transaction
+            .execute(
+                "DELETE FROM lexical_index_state WHERE collection_id = ?1",
+                params![collection_id],
+            )
+            .map_err(storage_failure)?;
+        transaction
+            .execute(
+                "DELETE FROM semantic_index_state WHERE collection_id = ?1",
+                params![collection_id],
+            )
+            .map_err(storage_failure)?;
+        let display_name = transaction
             .query_row(
                 "DELETE FROM collections WHERE name_key = ?1 RETURNING display_name",
                 params![name.name_key()],
@@ -324,8 +411,9 @@ impl CollectionStore for SqliteCollectionStore {
             )
             .optional()
             .map_err(storage_failure)?;
-
         let display_name = display_name.ok_or(CollectionStoreError::CollectionNotFound)?;
+
+        transaction.commit().map_err(storage_failure)?;
 
         CollectionName::try_from(display_name.as_str()).map_err(storage_failure)
     }

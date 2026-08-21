@@ -419,6 +419,8 @@ resolution, keep the disambiguation contract, and add a store regression test.
 
 - **Kind:** Robustness / correctness
 - **Priority:** Critical (data leakage, orphaned records)
+- **Status:** `PROMOTED` — committed as EPIC-010 in `PRD-001` (US-016,
+  `specs/016-destroy-integrity`); resolved decision recorded as DEC-015
 - **Locations:**
   - `crates/adapters/store-sqlite/src/lib.rs:314-331` — `destroy_collection`
     executes only `DELETE FROM collections WHERE name_key = ?1`
@@ -710,7 +712,7 @@ execution for future compatibility.
 | OBS-005 | SQLite adapter consolidation (shared helpers/SQL) | Maintainability | Candidate; parkable if capacity is tight |
 | OBS-006 | Graph store strictness (no silent kind/relation fallback) | Robustness | Small; natural pairing with OBS-005 |
 | OBS-007 | Retrieval queries fetch only required columns | Performance | Fold into OBS-004/OBS-005 |
-| OBS-008 | Collection lifecycle data integrity (cascade destroy child/virtual tables) | Robustness / correctness | High priority; critical data integrity fix |
+| OBS-008 | Collection lifecycle data integrity (cascade destroy child/virtual tables) | Robustness / correctness | `PROMOTED` to EPIC-010 (US-016) |
 | OBS-009 | Wikilink graph extraction (`[[note]]` and `[[note|label]]`) | Behavior inconsistency | High priority; standard markdown vault support |
 | OBS-010 | Code-fence aware passage segmentation and link extraction | Robustness / correctness | Candidate; preserves code block integrity |
 | OBS-011 | SQLite connection PRAGMAs and concurrency configuration | Scalability / performance | Candidate; pair with OBS-008 and OBS-005 |
@@ -727,9 +729,9 @@ execution for future compatibility.
    new PRD. None of the entries above obviously introduces new personas or a
    product pivot, which leans toward an `PRD-001` update, but the owner decides.
 2. **Epic selection** — OBS-001 (with OBS-003 folded in) is committed as
-   EPIC-008 / US-014 and OBS-002 is committed as EPIC-009 / US-015; the
-   remaining observations await epic selection. The provisional mapping above
-   is a suggestion only.
+   EPIC-008 / US-014, OBS-002 as EPIC-009 / US-015, and OBS-008 as
+   EPIC-010 / US-016; the remaining observations await epic selection. The
+   provisional mapping above is a suggestion only.
 3. **Severity confirmation** — each entry records a proposed priority; confirm
    or adjust during epic refinement.
 

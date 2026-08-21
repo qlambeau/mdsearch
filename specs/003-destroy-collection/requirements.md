@@ -59,10 +59,12 @@ it from the selected database.
 | FR-009 | Destroying one collection shall leave all other collections unchanged. | Must | US-003; Destroy one collection without disturbing others |
 | FR-010 | A destroyed collection shall no longer appear in a later `collection list` run. | Must | US-003; A destroyed collection no longer appears in a later listing |
 | FR-011 | The destroy command shall require no confirmation. | Must | US-003; Destroy a collection by name |
+| FR-012 | On success, the destroy shall remove the collection and every row belonging to it — stored files, FTS5 passages, passage mappings, vectors, graph nodes and edges, and all index-state rows — in one atomic transaction; a failure at any point rolls back and leaves the collection and its data intact. | Must | US-016; Destroying a fully indexed collection removes every trace; A failed destroy leaves the collection intact |
 
 ## Postconditions And Invariants
 
-- A successful destroy removes exactly the matching collection.
+- A successful destroy removes exactly the matching collection and every row
+  belonging to it in all per-collection tables.
 - Destroying a collection does not change any other collection.
 - A failed destroy leaves the database unchanged and creates no database file.
 - The operation does not require network access or an external service.
@@ -73,6 +75,7 @@ it from the selected database.
 | --- | --- | --- |
 | Database does not exist at the selected path | Fail without creating a database file | Output communicates that the database does not exist |
 | No collection matches the requested name | Fail without changing the database | Output communicates that the collection was not found |
+| A storage failure occurs during the destroy | Roll back the whole delete | The collection and its data remain intact; a storage error is reported |
 | `NAME` is empty, whitespace-only, or contains a path separator or control character | Reject before touching the database | Output communicates that the collection name is invalid |
 | `--database PATH` is supplied | Use `PATH` rather than the default path | Success or failure applies to the selected database |
 
