@@ -6,13 +6,16 @@ status: draft
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
 owner: TBD
+supersedes: null
+superseded_by: null
 related: []
 ---
 
 # Architecture Decision Record
 
-<!-- Optional supporting artifact. Use an ADR for a consequential technical or
-domain decision whose rationale should survive the current feature. -->
+<!-- An ADR records a consequential technical decision. 
+NOTE: Once accepted/approved, an ADR is immutable. If a decision changes later, 
+create a new ADR that supersedes this one; do not rewrite accepted history. -->
 
 ## Context
 

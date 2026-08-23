@@ -7,6 +7,9 @@ created: YYYY-MM-DD
 updated: YYYY-MM-DD
 owner: TBD
 parent: US-NNN
+depends_on: []
+requires: []
+blockers: []
 related:
   - REQ-NNN
   - DES-NNN
@@ -24,17 +27,22 @@ TBD
 
 ## Ordered Tasks
 
-- [ ] **TASK-001:** TBD
-  - Depends on: TBD
-  - Verification: TBD
-- [ ] **TASK-002:** TBD
-  - Depends on: TASK-001
-  - Verification: TBD
+- [ ] **TASK-NNN-1 (RED):** Write failing unit / integration tests covering specified behavior.
+  - Depends on: None
+  - Verification: Tests fail with expected error output.
+- [ ] **TASK-NNN-2 (GREEN):** Implement minimal production code to satisfy TASK-NNN-1.
+  - Depends on: TASK-NNN-1
+  - Verification: Tests pass green.
+- [ ] **TASK-NNN-3:** CLI and acceptance integration covering `scenarios.feature`.
+  - Depends on: TASK-NNN-2
+  - Verification: All scenarios pass.
 
 ## Test And Verification Plan
 
-- [ ] Unit or component checks: TBD
+- [ ] Unit checks: TBD
+- [ ] Integration checks: TBD
 - [ ] Gherkin scenarios: `scenarios.feature`
+- [ ] Quality gates: `cargo xtask ci` and `cargo xtask eval` (when applicable)
 - [ ] Non-functional checks: TBD
 
 ## Rollout And Recovery

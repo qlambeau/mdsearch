@@ -5,7 +5,7 @@ type: table-schema
 status: approved
 created: 2026-08-14
 updated: 2026-08-14
-owner: TBD
+owner: Quentin
 database: DB-001
 table_name: "schema_version"
 table_type: "table"
@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 
 | Column | Data Type | Nullable | Primary Key | Default | Description |
 | --- | --- | --- | --- | --- | --- |
-| `version` | `INTEGER` | No | No | None | Current applied database schema version number (set to `2` by the migration). |
+| `version` | `INTEGER` | No | No | None | Current applied database schema version number (currently version `7`). |
 
 ## Indexes & Constraints
 
@@ -48,4 +48,4 @@ CREATE TABLE IF NOT EXISTS schema_version (
   WHERE NOT EXISTS (SELECT 1 FROM schema_version);
   ```
 - Incremented monotonically when schema migrations are applied in feature
-  slices; the migration in `004-add-files` advances it to `2`.
+  slices; the migration in `015-embedding-dimensions` advances it to `7` per [`DB-001`](file:///home/quentin/Documents/dev/genAI/code/kv/specs/schema/DB-001.md).

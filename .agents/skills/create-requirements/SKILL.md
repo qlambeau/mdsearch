@@ -68,16 +68,18 @@ The file must contain:
 - Dependencies and deferred decisions when applicable.
 - Traceability to the story, scenarios, and parent PRD.
 
-Set `status: draft` while the contract is under review. Do not create
-`design.md`, `tasks.md`, code, or empty downstream files as a side effect.
+Set `status: draft` while the contract is being drafted. Once synthesized and confirmed
+by the reviewer, it is promoted to `status: approved` (via `promote-artifact` or explicit confirmation)
+before `create-design` or `create-tasks` can be executed.
 
 ## Review And File Writes
 
 1. Synthesize the proposed contract and its traceability in chat.
 2. List unresolved questions and identify which, if any, block the contract.
-3. Ask whether to write the artifact as a draft, revise it, or stop for clarification.
-4. Never overwrite an existing `requirements.md` silently; inspect it and require explicit confirmation before revising it.
-5. After writing, report the path, requirement ID, status, covered scenarios, and remaining non-blocking decisions.
+3. Show the complete frontmatter (`id`, `title`, `type: feature-requirements`, `status: draft`, `owner`, `parent: US-NNN`, `depends_on`, `requires`, `blockers`).
+4. Ask whether to write the artifact as a draft, revise it, or approve it.
+5. Never overwrite an existing `requirements.md` silently; inspect it and require explicit confirmation before revising it.
+6. After writing, report the path, requirement ID, status, covered scenarios, and remaining non-blocking decisions. When confirmed approved, promote to `status: approved`.
 
 ## Completion Checklist
 

@@ -1,3 +1,6 @@
+# parent: US-002
+# status: approved
+
 Feature: List all collections
 
   As a developer-curator

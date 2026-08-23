@@ -80,8 +80,9 @@ When a consequential decision is needed:
 1. State the decision and the user-visible or architectural reason.
 2. List credible alternatives and tradeoffs.
 3. Ask for clarification when the decision is not already approved.
-4. Create or revise the ADR only with explicit confirmation.
-5. Link the ADR from `design.md` and keep its status consistent with its review state.
+4. **ADR Immutability Rule:** If revising an existing approved/accepted ADR, do NOT edit it in-place. Create a new `ADR-NNN` with `supersedes: ADR-OLD` and mark `ADR-OLD` as `status: superseded`. Only draft ADRs may be revised in-place.
+5. Create or supersede the ADR only with explicit confirmation.
+6. Link the ADR from `design.md` and keep its status consistent with its review state.
 
 Do not treat a template as an ADR, and never reuse an ADR ID. The independent
 `ADR-NNN` sequence includes active, archived, and superseded records.

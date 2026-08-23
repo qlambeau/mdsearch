@@ -1,3 +1,6 @@
+# parent: US-007
+# status: approved
+
 Feature: Search the lexical index for ranked passages
 
   As a developer-curator and coding-agent harness

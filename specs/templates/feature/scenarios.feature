@@ -1,3 +1,5 @@
+# parent: US-NNN
+# status: draft
 # TEMPLATE: Replace this clearly illustrative feature with the story's approved
 # behavior. Keep one Feature per user story and keep steps at the behavioral
 # level rather than naming UI controls or implementation methods.

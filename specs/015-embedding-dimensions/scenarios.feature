@@ -1,3 +1,6 @@
+# parent: US-015
+# status: approved
+
 Feature: Embed collections at the selected model's embedding dimension
 
   As a developer-curator and coding-agent harness

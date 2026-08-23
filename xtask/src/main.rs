@@ -7,6 +7,7 @@ use std::fmt;
 use std::process::{Command, ExitCode};
 
 pub mod eval;
+pub mod validate_specs;
 
 #[derive(Debug)]
 struct CommandFailed {
@@ -71,7 +72,12 @@ where
             eval::run_eval(&options, &mut stdout)?;
             Ok(())
         }
-        _ => Err("usage: cargo xtask <ci|eval>".into()),
+        "validate-specs" => {
+            let mut stdout = std::io::stdout().lock();
+            validate_specs::run_validate_specs(&mut stdout)?;
+            Ok(())
+        }
+        _ => Err("usage: cargo xtask <ci|eval|validate-specs>".into()),
     }
 }
 
@@ -114,6 +120,11 @@ where
             "--ignore-filename-regex",
             "vendor/sqlite-vector-rs",
         ],
+        None,
+    )?;
+    runner(
+        "cargo",
+        vec!["run", "-p", "xtask", "--", "validate-specs"],
         None,
     )?;
 
@@ -185,6 +196,18 @@ mod tests {
     }
 
     #[test]
+    fn runs_validate_specs_subcommand() -> Result<(), Box<dyn std::error::Error>> {
+        let mut runner = |_program: &str,
+                          _arguments: Vec<&'static str>,
+                          _environment: Option<(&'static str, &'static str)>|
+         -> Result<(), Box<dyn std::error::Error>> { Ok(()) };
+
+        run_with_args([String::from("validate-specs")], &mut runner)?;
+
+        Ok(())
+    }
+
+    #[test]
     fn formats_a_command_for_failure_output() {
         assert_eq!(
             format_command("cargo", &["test", "--workspace"]),
@@ -208,7 +231,7 @@ mod tests {
 
         run_with_args([String::from("ci")], &mut runner)?;
 
-        assert_eq!(commands.len(), 6);
+        assert_eq!(commands.len(), 7);
         assert_eq!(
             commands.first().map(|command| &command.0),
             Some(&String::from("cargo fmt --all -- --check"))
@@ -225,6 +248,10 @@ mod tests {
                 .0
                 .contains("--ignore-filename-regex vendor/sqlite-vector-rs")
         }));
+        assert_eq!(
+            commands.get(6).map(|command| &command.0),
+            Some(&String::from("cargo run -p xtask -- validate-specs"))
+        );
 
         Ok(())
     }

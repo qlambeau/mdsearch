@@ -2,10 +2,10 @@
 id: REQ-014
 title: "Unify literal free-text query semantics across lexical and hybrid search requirements"
 type: feature-requirements
-status: draft
+status: approved
 created: 2026-08-21
-updated: 2026-08-21
-owner: TBD
+updated: 2026-08-22
+owner: Quentin
 parent: US-014
 related:
   - US-007

@@ -24,7 +24,8 @@ Provide the agent with a file path to your user stories:
 
 ### 1. Locate and Read the Input File
 * Locate the specified user story file. If not found or if the path is not provided, ask the user for the file path.
-* Read the complete story, including its business rules, examples, acceptance criteria, scope boundaries, dependencies, and open questions.
+* Read the complete story, including its frontmatter, business rules, examples, acceptance criteria, scope boundaries, dependencies, and open questions.
+* **Prerequisite Gate:** Verify that the user story is in `status: approved`. If it is still in `status: draft`, ask the user to confirm/approve the story before translating to Gherkin.
 * If the path is under `specs/NNN-feature-slug/` and the filename is `user-story.md`, use the sibling `scenarios.feature` as the default output.
 * For a story outside that layout, use an explicitly supplied output path. If none is supplied, use a sibling `scenarios.feature` rather than creating a central directory.
 * Never silently replace an existing output file; inspect it and ask for confirmation before revising it.
@@ -37,6 +38,11 @@ Provide the agent with a file path to your user stories:
 * Do not resolve domain ambiguity by guessing or by adding implementation details.
 
 ### 3. Translation to Gherkin
+* Include standard header comments at the top of the `.feature` file:
+  ```gherkin
+  # parent: US-NNN
+  # status: approved
+  ```
 * Map the user story to exactly one Gherkin `Feature` in the target file.
 * Translate acceptance criteria into clear `Given-When-Then` Scenarios.
 * Use `Scenario Outline` with `Examples` tables for parameterized behavior (e.g., input validation boundaries).

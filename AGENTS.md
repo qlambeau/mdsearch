@@ -8,39 +8,32 @@ the `mdsearch` Markdown Knowledge Search CLI described by `PRD-001`.
 
 ## Read First
 
+> **Authority:** `specs/SDD_WORKFLOW.md` is the **single normative authority** for the SDD lifecycle, artifact responsibilities, state transitions, gates, and the spec-ready predicate. `specs/CONSTITUTION.md` is the single normative authority for Rust engineering rules. `AGENTS.md` (this file) and `docs/SDD_WORKFLOW_KIT.md` are **derivative / informational** only — if they conflict with `specs/SDD_WORKFLOW.md` on workflow matters, `specs/SDD_WORKFLOW.md` wins; if `specs/SDD_WORKFLOW.md` conflicts with the Constitution on engineering form, the Constitution wins and the conflict MUST be raised.
+
+- Read `specs/SDD_WORKFLOW.md` for the complete specification workflow and gates — **single normative source** for lifecycle, gates, readiness, artifact boundaries, identifier/template rules, and editing rules.
+- Read the complete `specs/CONSTITUTION.md` before the first Rust edit in a session; it is the normative engineering authority for Rust.
+- Read `docs/SDD_WORKFLOW_KIT.md` only as a **non-normative, informational** kit manual — it MUST NOT be treated as a gate definition; if it conflicts with `specs/SDD_WORKFLOW.md`, the latter wins.
 - Read `README.md` for the `mdsearch` tool manual and repository orientation.
-- Read `docs/SDD_WORKFLOW_KIT.md` for the spec-first workflow kit documentation.
-- Read `SDD_WORKFLOW.md` for the complete specification workflow and gates.
-- Read the complete `specs/CONSTITUTION.md` before the first Rust edit in a session; it is the normative engineering authority.
 - Read the applicable PRD under `specs/prds/` before refining or implementing a feature.
 - Read the complete feature packet under `specs/NNN-feature-slug/` before generating code.
 - Read related ADRs under `specs/adr/` before making consequential technical decisions.
 - Treat files under `specs/templates/` as source templates, not active product or feature specifications.
 
-## Required SDD Workflow
+## SDD Workflow — Summary
 
-Work on one independently valuable vertical feature slice at a time.
+> **Derivative summary.** The paragraphs below are NOT the gate definitions. For lifecycle, artifact responsibilities, state transitions, the spec-ready predicate, identifier/template rules, editing rules, and precedence, the **normative source is `specs/SDD_WORKFLOW.md`**; on Rust engineering form `specs/CONSTITUTION.md` wins and any conflict MUST be raised.
 
-1. Select a slice from an approved PRD.
-2. Refine an approved `user-story.md` with actor, goal, value, rules, examples, scope, dependencies, and testable acceptance criteria.
-3. Create one sibling `scenarios.feature` with unambiguous behavioral scenarios.
-4. Complete `requirements.md` with externally observable inputs, outputs, validation, errors, invariants, and quality requirements.
-5. Complete `design.md` with the technical approach, interfaces, state flow, risks, alternatives, and verification approach.
-6. Record consequential or durable decisions in an ADR.
-7. Complete `tasks.md` with ordered implementation work and concrete verification checks.
-8. Generate or implement code only from the approved implementation packet.
-9. Run tests and review the implementation against the approved specifications.
-10. Update and approve the specifications before changing behavior discovered during implementation.
+Work on one independently valuable vertical feature slice at a time. The lifecycle, gates, and readiness predicate are defined in `specs/SDD_WORKFLOW.md` (Shared Artifact Lifecycle, Artifact Boundaries/Responsibilities, Spec-Ready Checklist, Constitutional Engineering Loop). In short: select a slice from an approved PRD → refine `user-story.md` (US-NNN) → `scenarios.feature` (`# parent`/`# status: approved`) → `requirements.md` (REQ-NNN) → `design.md` (DES-NNN) + ADRs → `tasks.md` (TASK-NNN) → validate packet readiness (`promote-artifact`, all specs `approved`) → test-first implementation (`RED → GREEN → REFACTOR → TRACE`, `R-SDD-02`) → project quality & domain gates defined by `specs/CONSTITUTION.md` with observed output in `tasks.md` → update specs first if behavior diverges → release record + archive.
 
-Stop and ask for clarification when a blocking product, domain, dependency, or
-behavior question remains. Do not invent missing requirements.
+Stop and ask for clarification when a blocking product, domain, dependency, or behavior question remains. Do not invent missing requirements.
 
-## Rust Constitution
+Artifact responsibilities, identifier allocation (`PRD-NNN`, `ADR-NNN`, `US-NNN`, `REQ-NNN`, `DES-NNN`, `TASK-NNN`, `CHART-NNN`, `DB-NNN`, `TABLE-NNN`, `OBS-NNN`, `REL-NNN`), template rules, and editing/verification expectations: see `specs/SDD_WORKFLOW.md` §Artifact Boundaries, §Identifier Rules, §Template Rules, §Editing and Verification. Product-specific constraints live in the approved PRD (e.g. `specs/prds/PRD-001.md` for this project), not in this workflow summary.
 
-`specs/CONSTITUTION.md` governs how Rust code is written. Specifications govern
-what the code must do. If they conflict, preserve the constitution's engineering
-rules, preserve the specification's behavior, and raise the conflict rather
-than silently choosing.
+## Rust Constitution — Summary
+
+> **Derivative summary.** The paragraphs below are NOT the engineering authority. The normative source is `specs/CONSTITUTION.md`.
+
+`specs/CONSTITUTION.md` governs how Rust code is written. Specifications govern what the code must do. If they conflict, preserve the constitution's engineering rules, preserve the specification's behavior, and raise the conflict rather than silently choosing.
 
 - Read the constitution itself before editing Rust; do not rely on a summary.
 - Do not add a crate-level dependency, workspace member, or architectural layer without explicit human approval in the current session.
@@ -49,81 +42,6 @@ than silently choosing.
 - Do not amend `specs/CONSTITUTION.md` without explicit current-session human authorization and an accompanying ADR; `ADR-002` records the authorized repository-layout exception for this session.
 - A Rust unit of work is incomplete until the constitution's required tooling and Definition of Done gates have been executed and observed.
 
-
 The complete implementation packet includes `specs/CONSTITUTION.md`.
 
-## Artifact Boundaries
-
-- PRDs define product intent, outcomes, scope, constraints, and boundaries.
-- User stories define business intent and observable value without prescribing implementation.
-- Gherkin scenarios define executable behavioral examples.
-- Requirements define externally observable contracts.
-- Design documents define how approved behavior will be realized.
-- ADRs preserve consequential decisions, alternatives, and tradeoffs.
-- Diagrams (`CHART-NNN`) serve as the central repository of Mermaid-formatted diagrams to conceptualize architecture, design, and business processes without replacing inline diagrams in feature files.
-- Databases (`DB-NNN`) and Tables (`TABLE-NNN`) define the physical and logical database schemas, with strict frontmatter references between tables and their parent database.
-- Tasks define implementation order and verification, but must not silently change behavior.
-
-## Identifier Rules
-
-Use independent monotonically increasing sequences for PRD, ADR, user-story,
-chart, database, and table artifact types.
-
-- PRDs use `PRD-NNN` and live at `specs/prds/PRD-NNN.md`.
-- ADRs use `ADR-NNN` and live under `specs/adr/`.
-- User stories use `US-NNN` and live at `specs/NNN-feature-slug/user-story.md`.
-- Diagrams use `CHART-NNN` and live at `specs/charts/CHART-NNN.md`.
-- Databases use `DB-NNN` and live at `specs/schema/DB-NNN.md`.
-- Tables use `TABLE-NNN` and live at `specs/schema/TABLE-NNN.md`.
-- `NNN` is exactly three zero-padded decimal digits.
-- Each prefix has its own independent sequence; creating `ADR-001` or `CHART-001` does not advance PRD, DB, or TABLE numbering.
-- Allocate the next number above every existing active, archived, or superseded artifact of the same type.
-- Never reuse an ID, including after deletion, archiving, or supersession.
-- Preserve an ID when revising or moving an artifact.
-- Template placeholders such as `PRD-NNN`, `ADR-NNN`, `US-NNN`, `CHART-NNN`, `DB-NNN`, and `TABLE-NNN` do not consume numbers.
-- Database and table files must start with a YAML frontmatter header that ALWAYS maintains strict bidirectional reference between tables and databases (`database: DB-NNN` in table frontmatter, `tables: [TABLE-NNN, ...]` in database frontmatter).
-- Scan existing artifacts before allocating an ID and stop if a collision is found.
-
-The current approved project PRD is `specs/prds/PRD-001.md`. The first concrete
-ADR and user story may use `ADR-001` and `US-001`; their former illustrative
-template values do not reserve those numbers.
-
-## Template Rules
-
-- Use templates from `specs/templates/` when creating new artifacts.
-- Replace all illustrative content, placeholder metadata, and example domain behavior before approval.
-- Never treat the former `specs/001-short-feature-slug/` directory or its sample delivery-address content as a real feature.
-- Never treat `specs/templates/supporting/adr.md` as an approved ADR.
-- Do not create downstream feature files merely as empty placeholders; create them when the preceding artifact is ready.
-
-## Product Constraints
-
-Preserve these approved `mdsearch` constraints unless the PRD or an ADR explicitly
-changes them:
-
-- Local-first and offline operation are the defaults.
-- External services are opt-in through CLI switches.
-- Delivery is a single compiled Rust binary.
-- All collections live in one embedded database file per machine.
-- Indexing is driven by explicit update commands; there is no file watching.
-- The tool retrieves grounded content but does not generate answers.
-- Human-readable output is the default; richer machine-readable JSON is opt-in.
-- Web UI, server mode, multi-user access, authentication, cloud sync, and hosted collections are out of scope.
-
-Resolve database-engine and model decisions just in time for the feature that
-needs them. Do not silently turn an open question into an architectural fact.
-
-## Editing And Verification
-
-- Inspect existing files and related specifications before editing.
-- Do not overwrite an existing artifact silently.
-- Keep front matter, IDs, parent references, statuses, and traceability consistent.
-- Verify changed Markdown paths and internal references.
-- Keep Mermaid diagrams in fenced `mermaid` blocks.
-- For documentation-only changes, verify paths, links, IDs, and stale references.
-- Run relevant implementation checks when application code exists.
-- For Rust code, execute the constitution's required gates and report observed command output; do not claim completion from intent.
-- Do not commit or publish changes unless explicitly requested.
-
-QMD and the personal wiki are optional research tools. They are not runtime
-dependencies and must not be required when the user has not requested research.
+QMD and the personal wiki are optional research tools. They are not runtime dependencies and must not be required when the user has not requested research.

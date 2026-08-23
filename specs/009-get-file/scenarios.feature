@@ -1,3 +1,6 @@
+# parent: US-009
+# status: approved
+
 Feature: Retrieve a complete file by name or ID
 
   As a developer-curator and coding-agent harness

@@ -1,3 +1,6 @@
+# parent: US-003
+# status: approved
+
 Feature: Destroy a named collection
 
   As a developer-curator

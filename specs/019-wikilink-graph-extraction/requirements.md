@@ -5,7 +5,7 @@ type: feature-requirements
 status: approved
 created: 2026-08-22
 updated: 2026-08-22
-owner: TBD
+owner: Quentin
 parent: US-019
 related:
   - US-012

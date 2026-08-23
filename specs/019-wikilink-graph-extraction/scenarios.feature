@@ -1,3 +1,6 @@
+# parent: US-019
+# status: approved
+
 Feature: Wikilink graph extraction
 
   As a developer-curator whose vault uses Obsidian-style wikilinks

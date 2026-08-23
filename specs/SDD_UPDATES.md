@@ -289,7 +289,7 @@ per-collection edge invariants not enforced by its DDL.
 
 Features 012 and 013 have approved story/requirements/design artifacts but
 implemented task artifacts. Many approved or implemented artifacts retain
-`owner: TBD`, despite `AGENTS.md:91-97` requiring placeholder metadata to be
+`owner: Quentin`, despite `AGENTS.md:91-97` requiring placeholder metadata to be
 replaced before approval. `specs/archive/` contains only `.gitkeep` even though
 the workflow defines archival of completed packets.
 
@@ -685,7 +685,7 @@ inventing historical evidence.
    missing evidence as explicit audit debt.
 9. Correct `TABLE-001`, `TABLE-005`, and `TABLE-011` so DDL and invariants agree.
 10. Complete machine-readable `related`, `requires`, and `depends_on` references.
-11. Replace approved-artifact `owner: TBD` values or explicitly define an approved
+11. Replace approved-artifact `owner: Quentin` values or explicitly define an approved
     ownership exception.
 12. Archive packets only after completion evidence and supersession relationships
     are verified.
@@ -760,7 +760,7 @@ The following decisions should be resolved before changing workflow behavior:
 6. Is file retrieval explicitly UTF-8-only, or must the CLI preserve arbitrary
    stored bytes?
 7. What concrete latency target replaces the normative `TBD` in feature 011?
-8. Who owns approved artifacts currently carrying `owner: TBD`?
+8. Who owns approved artifacts currently carrying `owner: Quentin`?
 9. Should observation records live in `specs/observations/OBS-NNN.md` or remain
    rows inside `specs/TODO.md` with added lifecycle fields?
 10. What severity levels and response expectations apply to post-release

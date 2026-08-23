@@ -5,7 +5,7 @@ type: user-story
 status: implemented
 created: 2026-08-16
 updated: 2026-08-16
-owner: TBD
+owner: Quentin
 parent: PRD-001
 epic: EPIC-001
 feature: 002-list-collections

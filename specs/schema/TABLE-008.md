@@ -5,7 +5,7 @@ type: table-schema
 status: approved
 created: 2026-08-18
 updated: 2026-08-18
-owner: TBD
+owner: Quentin
 database: DB-001
 table_name: "semantic_index_state"
 table_type: "table"

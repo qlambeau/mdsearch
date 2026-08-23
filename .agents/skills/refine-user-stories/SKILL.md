@@ -34,9 +34,10 @@ story.
    PRD path.
 3. If no applicable PRD exists, stop without writing files and tell the user to
    run `create-prd` first.
-4. If no epic was supplied, list the epics from the applicable PRD and ask the
+4. Verify that the selected PRD is in `status: approved`. If it is still in `status: draft`, stop and request PRD approval first.
+5. If no epic was supplied, list the epics from the applicable PRD and ask the
    user to choose one.
-5. If the requested epic cannot be found, stop without writing files and ask
+6. If the requested epic cannot be found, stop without writing files and ask
    the user to identify an existing epic or revise the PRD.
 
 Do not invent a PRD, epic, persona, business rule, or dependency to make the

@@ -1,3 +1,6 @@
+# parent: US-016
+# status: approved
+
 Feature: Destroy a collection completely with no orphaned data
 
   As a developer-curator

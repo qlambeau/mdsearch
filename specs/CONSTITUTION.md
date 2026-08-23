@@ -113,10 +113,12 @@ specification layout:
 .
 ├── AGENTS.md
 ├── README.md
-├── SDD_WORKFLOW.md
+├── docs/
+│   └── SDD_WORKFLOW_KIT.md       # informational kit manual (non-normative)
 ├── .agents/
 │   └── skills/
 └── specs/
+    ├── SDD_WORKFLOW.md           # normative workflow — single authority for lifecycle/gates
     ├── CONSTITUTION.md
     ├── prds/
     ├── adr/
@@ -242,6 +244,10 @@ Each layer has exactly one job. Mixing them is the defect this section exists to
 - **R-SEP-13** — More than 5 parameters means a missing parameter struct. More than 3 with the same type means a missing newtype (R-TYP-01).
 - **R-SEP-14** — Accept the most general type you can use: `&str` over `&String`, `&[T]` over `&Vec<T>`, `impl IntoIterator<Item = T>` over `Vec<T>` when you only iterate.
 - **R-SEP-15** — Return concrete types from public APIs. Prefer a named type or `impl Trait` over `Box<dyn Trait>` on the return path unless heterogeneity is genuinely required.
+
+### 4.3 Database and persistence schemas
+
+- **R-DB-01** — When creating a table schema for a database, regardless of the database technology, every table MUST have a domain-independent primary key named `id` with a unique identifier enforced by the database system, if supported.
 
 ---
 
@@ -506,6 +512,7 @@ A unit of work is complete only when **every** box is checked, verified by obser
 - [ ] No new trait with a single implementation and no prospect of a second (R-TRT-06)
 - [ ] No `unwrap`/`expect`/`panic!`/`dbg!`/`println!` in production paths (R-ERR-02)
 - [ ] Domain identifiers are newtypes; invalid states are unrepresentable (§7)
+- [ ] Database table schemas have a domain-independent primary key named `id` (R-DB-01)
 - [ ] Public items documented, with `# Errors` and runnable examples (§11)
 - [ ] `cargo xtask ci` passes clean, no new warnings, no new suppressions (R-TOOL-04)
 - [ ] Coverage thresholds met (R-TST-16)
@@ -516,4 +523,4 @@ A unit of work is complete only when **every** box is checked, verified by obser
 
 ## 15. Amendment
 
-This constitution is version-controlled and amended by pull request with an accompanying ADR stating the problem, the proposed rule change, and the migration path for existing code. Rules are added with new IDs; retired rules are marked `RETIRED` in place. Agents MUST NOT amend this document. The repository-layout amendment recorded in `ADR-002` is a one-time, explicit human-authorized deviation from that prohibition and does not establish a standing exception.
+This constitution is version-controlled and amended by pull request with an accompanying ADR stating the problem, the proposed rule change, and the migration path for existing code. Rules are added with new IDs; retired rules are marked `RETIRED` in place. Agents MUST NOT amend this document. The repository-layout amendment recorded in `ADR-002` and the database table schema amendment recorded in `ADR-015` are explicit human-authorized deviations from that prohibition and do not establish standing exceptions.

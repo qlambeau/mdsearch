@@ -1,3 +1,6 @@
+# parent: US-010
+# status: approved
+
 Feature: Build the semantic index with the embed command
 
   As a developer-curator and coding-agent harness

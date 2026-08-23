@@ -5,7 +5,7 @@ type: feature-design
 status: implemented
 created: 2026-08-17
 updated: 2026-08-17
-owner: TBD
+owner: Quentin
 parent: US-004
 related:
   - REQ-004

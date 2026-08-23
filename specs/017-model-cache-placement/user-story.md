@@ -5,7 +5,7 @@ type: user-story
 status: approved
 created: 2026-08-22
 updated: 2026-08-22
-owner: TBD
+owner: Quentin
 parent: PRD-001
 epic: EPIC-011
 feature: 017-model-cache-placement

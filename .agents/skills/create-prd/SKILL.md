@@ -28,12 +28,11 @@ explicit project path. Resolve all output paths relative to that target root.
 
 ## Scope And Output
 
-Support two explicit scopes:
+Support three explicit scopes per `specs/prd_lifecycle_and_evolution_plan.md`:
 
-1. **Project PRD**: write `specs/prds/PRD-NNN.md`, using the next available PRD
-   ID.
-2. **Major-feature PRD**: write `specs/prds/PRD-NNN.md`, using the next
-   available PRD ID. The project PRD is the parent when one exists.
+1. **In-place PRD Update**: Revise an existing approved PRD (e.g. `specs/prds/PRD-001.md`) when adding epics within the current product vision.
+2. **Major-feature PRD**: Write `specs/prds/PRD-NNN.md` with `scope: major-feature` and `parent: PRD-001` for large modular subsystems.
+3. **Superseding Project PRD**: Write `specs/prds/PRD-NNN.md` with `scope: project` and `supersedes: PRD-OLD` when a fundamental vision/paradigm pivot occurs. Mark `PRD-OLD` as `status: superseded`.
 
 All PRDs use the same independent monotonically increasing `PRD-NNN` sequence.
 The numeric portion is exactly three zero-padded decimal digits. Scan active,

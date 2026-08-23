@@ -5,7 +5,7 @@ type: feature-requirements
 status: implemented
 created: 2026-08-18
 updated: 2026-08-18
-owner: TBD
+owner: Quentin
 parent: US-010
 related:
   - US-006

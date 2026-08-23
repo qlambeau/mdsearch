@@ -1,3 +1,6 @@
+# parent: US-018
+# status: approved
+
 Feature: embed shows live ingestion progress on stderr
 
   As a developer-curator
