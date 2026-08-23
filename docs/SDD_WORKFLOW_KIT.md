@@ -91,7 +91,7 @@ This manual suggests an order; the authorities remain the two `specs/` files abo
 
 ## Adoption
 
-The workflow kit embeds the following skills under `.agents/skills/`:
+The workflow kit embeds the following skills under `.agents/skills/` — each workflow step in `specs/SDD_WORKFLOW.md` §Skill Mapping MUST be executed via its mapped skill (normative, see `specs/SDD_WORKFLOW.md` §Normative Authority & Precedence and §Skill Mapping). Bypassing the skill is non-conforming.
 - `create-prd`
 - `refine-user-stories`
 - `user-story-to-gherkin`
@@ -105,7 +105,7 @@ The workflow kit embeds the following skills under `.agents/skills/`:
 - `record-release`
 - `qmd` (optional bootstrap)
 
-Use `specs/templates/` when creating new artifacts. Keep the kit's templates
+Use `specs/templates/` only via the skills (templates are source material for the skills, not a bypass). Keep the kit's templates
 available to the skills; do not assume this workspace is the target project.
 Skill behavior is governed by `specs/SDD_WORKFLOW.md` and `specs/CONSTITUTION.md`; this manual does not override skill contracts.
 

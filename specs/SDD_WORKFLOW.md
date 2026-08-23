@@ -10,7 +10,8 @@ vertical slice at a time rather than specifying the entire product upfront.
 
 1. **Workflow authority:** `specs/SDD_WORKFLOW.md` (this file) — normative for lifecycle, artifact boundaries, gates, and readiness.
 2. **Engineering authority:** `specs/CONSTITUTION.md` — normative for Rust engineering rules, layering, and quality gates.
-3. **Derivative / informational:** `AGENTS.md` (operational read-first guide), `docs/SDD_WORKFLOW_KIT.md` (kit manual), `README.md`, skills, and templates — MUST defer to (1) and (2). Do not treat derivative summaries as gate definitions.
+3. **Skill enforcement:** Every workflow step defined in [`§Skill Mapping`](#skill-mapping) MUST be executed via its mapped skill under `.agents/skills/` (or project-equivalent skill path). Direct creation or editing of artifacts bypassing the skill, or manual `status` transitions bypassing `promote-artifact` / `verify-feature`, is non-conforming — even if the resulting artifact appears correct.
+4. **Derivative / informational:** `AGENTS.md` (operational read-first guide), `docs/SDD_WORKFLOW_KIT.md` (kit manual), `README.md`, and `specs/templates/` content — MUST defer to (1), (2), and (3). Do not treat derivative summaries as gate definitions. Templates are source material for the skills; they are not a bypass.
 
 ```mermaid
 flowchart TD
@@ -83,16 +84,16 @@ flowchart TD
 
 ## Shared Artifact Lifecycle
 
-Normative. All specifications and supporting artifacts follow a shared, explicit state lifecycle:
+Normative. All specifications and supporting artifacts follow a shared, explicit state lifecycle. Every creation and every status transition MUST be performed via the skill mapped in [`§Skill Mapping`](#skill-mapping):
 
 | Status | Meaning | Promotion condition |
 | --- | --- | --- |
-| `draft` | Artifact is being authored or revised | Created by skill |
-| `in-review` | Artifact authoring complete, awaiting semantic review | Author requests review |
-| `approved` | Semantic behavior and boundaries confirmed by human reviewer | Human confirmation / `promote-artifact` |
+| `draft` | Artifact is being authored or revised | Created by its mapped skill (see `§Skill Mapping`) — manual creation bypassing the skill is non-conforming |
+| `in-review` | Artifact authoring complete, awaiting semantic review | Author requests review via the creating skill |
+| `approved` | Semantic behavior and boundaries confirmed by human reviewer | Human confirmation via `promote-artifact` (see `§Skill Mapping`) |
 | `implemented` | Implementation and verification executed with observed passing evidence | `verify-feature` + test evidence recorded |
-| `archived` | Feature is delivered and archived from active context | Relocated to `specs/archive/` |
-| `superseded` | Replaced by a newer artifact (requires `supersedes` / `superseded_by`) | Successor artifact approved |
+| `archived` | Feature is delivered and archived from active context | Relocated to `specs/archive/` via `record-release` / archival flow |
+| `superseded` | Replaced by a newer artifact (requires `supersedes` / `superseded_by`) | Successor artifact approved via its mapped skill |
 
 ## Artifact Boundaries
 
@@ -174,6 +175,8 @@ A feature is ready for code generation only when the **Spec-Ready Predicate** pa
 - All cross-references between artifacts resolve cleanly.
 
 ## Skill Mapping
+
+Normative. Each workflow step MUST be executed via its mapped skill. The table is the single source of truth for how the step is performed; bypassing the skill (manual file creation, copy-paste from templates, or ad-hoc `status` edits) violates the workflow even if the artifact looks correct.
 
 | Workflow step | Skill | Primary Output / Action |
 | --- | --- | --- |
