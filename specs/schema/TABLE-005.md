@@ -5,7 +5,7 @@ type: table-schema
 status: approved
 created: 2026-08-17
 updated: 2026-08-17
-owner: TBD
+owner: Quentin
 database: DB-001
 table_name: "passage_files"
 table_type: "table"

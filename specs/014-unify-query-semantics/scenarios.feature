@@ -1,3 +1,6 @@
+# parent: US-014
+# status: approved
+
 Feature: Unify literal free-text query semantics across lexical and hybrid search
 
   As a developer-curator and coding-agent harness

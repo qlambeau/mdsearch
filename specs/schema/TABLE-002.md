@@ -5,7 +5,7 @@ type: table-schema
 status: approved
 created: 2026-08-14
 updated: 2026-08-14
-owner: TBD
+owner: Quentin
 database: DB-001
 table_name: "collections"
 table_type: "table"

@@ -1,3 +1,6 @@
+# parent: US-006
+# status: approved
+
 Feature: Build the lexical index during collection update
 
   As a developer-curator

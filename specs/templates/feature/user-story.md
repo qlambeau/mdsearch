@@ -9,6 +9,9 @@ owner: TBD
 parent: PRD-NNN
 epic: EPIC-NNN
 feature: NNN-feature-slug
+depends_on: []
+requires: []
+blockers: []
 related: []
 ---
 

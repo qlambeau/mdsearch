@@ -5,7 +5,7 @@ type: user-story
 status: approved
 created: 2026-08-19
 updated: 2026-08-19
-owner: TBD
+owner: Quentin
 parent: PRD-001
 epic: EPIC-005
 feature: 012-entity-graph

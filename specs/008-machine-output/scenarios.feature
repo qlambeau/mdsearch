@@ -1,3 +1,6 @@
+# parent: US-008
+# status: approved
+
 Feature: Show passage positions and machine-readable JSON for search
 
   As a developer-curator and coding-agent harness

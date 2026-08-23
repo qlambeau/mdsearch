@@ -2,12 +2,14 @@
 id: PRD-NNN
 title: "Product title"
 type: product-requirements
-scope: project-or-major-feature
+# Allowed scopes: project | major-feature
+scope: project
 status: draft
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
 owner: TBD
 parent: null
+supersedes: null
 related: []
 ---
 
@@ -43,9 +45,9 @@ TBD
 
 ### In Scope
 
-| Epic ID | Epic | Outcome |
-| --- | --- | --- |
-| EPIC-NNN | TBD | TBD |
+| Epic ID | Epic | Outcome | Depends On |
+| --- | --- | --- | --- |
+| EPIC-NNN | TBD | TBD | None |
 
 ### Capability Boundaries
 

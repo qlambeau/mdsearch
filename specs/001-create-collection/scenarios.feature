@@ -1,3 +1,6 @@
+# parent: US-001
+# status: approved
+
 Feature: Create an empty named collection
 
   As a developer-curator

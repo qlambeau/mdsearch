@@ -7,6 +7,9 @@ created: YYYY-MM-DD
 updated: YYYY-MM-DD
 owner: TBD
 parent: US-NNN
+depends_on: []
+requires: []
+blockers: []
 related:
   - REQ-NNN
 ---

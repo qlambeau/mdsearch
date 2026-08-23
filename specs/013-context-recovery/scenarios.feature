@@ -1,3 +1,6 @@
+# parent: US-013
+# status: approved
+
 Feature: Recover context from the entity graph
 
   As a developer-curator and coding-agent harness

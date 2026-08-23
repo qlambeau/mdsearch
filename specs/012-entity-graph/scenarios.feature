@@ -1,3 +1,6 @@
+# parent: US-012
+# status: approved
+
 Feature: Deterministic entity graph build and internal query layer
 
   As a developer-curator and coding-agent harness

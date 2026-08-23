@@ -1,3 +1,6 @@
+# parent: US-004
+# status: approved
+
 Feature: Add markdown files to a collection
 
   As a developer-curator

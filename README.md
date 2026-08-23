@@ -565,9 +565,11 @@ normative in `specs/CONSTITUTION.md` — read it before editing Rust code.
   (`store-sqlite`, `embed-fastembed`), `infrastructure`, `app` (the `mdsearch`
   binary crate), plus `xtask` (automation).
 - `specs/` — PRDs, ADRs, feature packets (`NNN-feature-slug/`), schema, and
-  templates for the spec-first workflow.
-- `docs/SDD_WORKFLOW_KIT.md` — the spec-first workflow kit documentation.
+  templates for the spec-first workflow. The single normative workflow and gates
+  live in `specs/SDD_WORKFLOW.md`; the single normative Rust engineering rules live
+  in `specs/CONSTITUTION.md`.
+- `docs/SDD_WORKFLOW_KIT.md` — informational kit manual (non-normative orientation guide; defers to `specs/SDD_WORKFLOW.md`).
 - `vendor/` — vendored `sqlite-vector-rs` dependency.
 
-See `docs/SDD_WORKFLOW_KIT.md` and `specs/` for how product intent is turned
+See `specs/SDD_WORKFLOW.md` (normative workflow) and `docs/SDD_WORKFLOW_KIT.md` (informational manual) for how product intent is turned
 into implementation-ready feature specifications.

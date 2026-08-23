@@ -5,7 +5,7 @@ type: feature-design
 status: approved
 created: 2026-08-22
 updated: 2026-08-22
-owner: TBD
+owner: Quentin
 parent: US-017
 related:
   - REQ-017

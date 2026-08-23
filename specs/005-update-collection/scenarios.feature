@@ -1,3 +1,6 @@
+# parent: US-005
+# status: approved
+
 Feature: Update a collection
 
   As a developer-curator

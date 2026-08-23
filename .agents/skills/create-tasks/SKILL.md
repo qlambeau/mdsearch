@@ -42,11 +42,12 @@ task.
 - Use one independently verifiable vertical feature slice.
 - Order tasks by dependency, not by technical layer alone.
 - Each task must state a concrete outcome, dependencies, and a verification check.
-- Include test-first work and make the red-to-green path observable.
+- Use structured task item IDs (e.g., `TASK-NNN-1`, `TASK-NNN-2`) distinct from the document ID `TASK-NNN`.
+- Plan test-first work explicitly: mark RED test tasks (failing test creation and verification) before GREEN implementation tasks.
 - Cover unit, integration, CLI, Gherkin, failure, recovery, and relevant non-functional checks.
 - Keep tasks within the approved scope; explicitly exclude future epics and speculative refactors.
 - Do not add a dependency, workspace member, architectural layer, or public API not justified by the approved design and constitution.
-- For Rust, include the constitution's required gates and Definition of Done checks, including observed output from `cargo xtask ci` when the workspace exists.
+- For Rust, include planned constitutional gates (`cargo xtask ci` and `cargo xtask eval`) in the verification plan. (Do not claim execution output during planning; output is logged during the verification phase).
 - Rollout and recovery must explain migration, retry, rollback, and partial-failure behavior.
 - Tasks do not change requirements or design. Revise those artifacts first when behavior changes.
 

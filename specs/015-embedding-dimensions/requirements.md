@@ -2,10 +2,10 @@
 id: REQ-015
 title: "Embed collections at the selected model's embedding dimension requirements"
 type: feature-requirements
-status: draft
+status: approved
 created: 2026-08-21
-updated: 2026-08-21
-owner: TBD
+updated: 2026-08-22
+owner: Quentin
 parent: US-015
 related:
   - US-010

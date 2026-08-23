@@ -5,7 +5,7 @@ type: user-story
 status: implemented
 created: 2026-08-17
 updated: 2026-08-21
-owner: TBD
+owner: Quentin
 parent: PRD-001
 epic: EPIC-003
 feature: 007-lexical-search

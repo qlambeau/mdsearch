@@ -5,7 +5,7 @@ type: implementation-tasks
 status: implemented
 created: 2026-08-17
 updated: 2026-08-17
-owner: TBD
+owner: Quentin
 parent: US-007
 related:
   - REQ-007

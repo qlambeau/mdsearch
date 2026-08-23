@@ -1,3 +1,6 @@
+# parent: US-011
+# status: approved
+
 Feature: Hybrid search with lexical-semantic fusion and cross-encoder re-ranking
 
   As a developer-curator and coding-agent harness

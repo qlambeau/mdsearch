@@ -2,10 +2,10 @@
 id: REQ-016
 title: "Destroy a collection completely with no orphaned data requirements"
 type: feature-requirements
-status: draft
+status: approved
 created: 2026-08-21
-updated: 2026-08-21
-owner: TBD
+updated: 2026-08-22
+owner: Quentin
 parent: US-016
 related:
   - US-003

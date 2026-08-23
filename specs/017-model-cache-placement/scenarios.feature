@@ -1,3 +1,6 @@
+# parent: US-017
+# status: approved
+
 Feature: Model downloads live under .mdsearch with reliable availability detection
 
   As a developer-curator and coding-agent harness

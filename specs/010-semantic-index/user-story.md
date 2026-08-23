@@ -5,7 +5,7 @@ type: user-story
 status: implemented
 created: 2026-08-18
 updated: 2026-08-18
-owner: TBD
+owner: Quentin
 parent: PRD-001
 epic: EPIC-004
 feature: 010-semantic-index

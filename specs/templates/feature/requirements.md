@@ -7,6 +7,9 @@ created: YYYY-MM-DD
 updated: YYYY-MM-DD
 owner: TBD
 parent: US-NNN
+depends_on: []
+requires: []
+blockers: []
 related: []
 ---
 
@@ -37,9 +40,9 @@ TBD
 
 ## Functional Requirements
 
-| ID | Requirement | Priority | Traceability |
+| ID | Requirement | Priority | Traceability (Story & Scenario) |
 | --- | --- | --- | --- |
-| FR-001 | TBD | Must | US-NNN |
+| FR-001 | TBD | Must | US-NNN / Scenario: TBD |
 
 ## Postconditions And Invariants
 

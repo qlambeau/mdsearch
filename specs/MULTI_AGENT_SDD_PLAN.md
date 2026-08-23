@@ -43,7 +43,7 @@ designated children.
 
 On every `/sdd` invocation, the coordinator will:
 
-1. Read `AGENTS.md`, `SDD_WORKFLOW.md`, the approved PRD, artifact metadata,
+1. Read `AGENTS.md`, `specs/SDD_WORKFLOW.md` (normative workflow), the approved PRD, artifact metadata,
    and relevant packet statuses.
 2. Resume an implementation already in progress if one exists.
 3. Dispatch the developer when exactly one story is implementation-ready.
@@ -272,8 +272,7 @@ Constitution gates executed:
 Specification deviations:
 Working-tree limitations:
 ```
-
-The authoritative summary contract belongs in `SDD_WORKFLOW.md`. Agent prompts
+The authoritative summary contract belongs in `specs/SDD_WORKFLOW.md` (normative). Agent prompts
 and skills reference it rather than duplicating it.
 
 ## Planned Files
@@ -294,7 +293,7 @@ and skills reference it rather than duplicating it.
 
 - `AGENTS.md`
 - `README.md`
-- `SDD_WORKFLOW.md`
+- `specs/SDD_WORKFLOW.md` (normative)
 - `.agents/skills/refine-user-stories/SKILL.md`
 - `.agents/skills/user-story-to-gherkin/SKILL.md`
 - `.agents/skills/create-requirements/SKILL.md`
@@ -327,7 +326,7 @@ migration.
 
 ## Implementation Sequence
 
-1. Add the explicit state and readiness contract to `SDD_WORKFLOW.md` and role
+1. Add the explicit state and readiness contract to `specs/SDD_WORKFLOW.md` (normative) and role
    authority rules to `AGENTS.md`.
 2. Update templates so new artifacts carry deterministic scheduling, blocker,
    approval, and verification metadata.

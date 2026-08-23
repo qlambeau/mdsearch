@@ -5,7 +5,7 @@ type: implementation-tasks
 status: implemented
 created: 2026-08-21
 updated: 2026-08-21
-owner: TBD
+owner: Quentin
 parent: US-014
 related:
   - REQ-014
