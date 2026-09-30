@@ -127,7 +127,7 @@ struct FakeStore {
     rebuilds: RefCell<Vec<(String, String, usize)>>,
     fail_store: bool,
     fail_rebuild: bool,
-    recorded_model: RefCell<Option<String>>,
+    recorded_model: Rc<RefCell<Option<String>>>,
     recorded_reranker: Rc<RefCell<Option<String>>>,
     recorded_dimension: RefCell<Option<usize>>,
 }
@@ -145,7 +145,7 @@ impl Default for FakeStore {
             rebuilds: RefCell::new(Vec::new()),
             fail_store: false,
             fail_rebuild: false,
-            recorded_model: RefCell::new(None),
+            recorded_model: Rc::new(RefCell::new(None)),
             recorded_reranker: Rc::new(RefCell::new(None)),
             recorded_dimension: RefCell::new(None),
         }
@@ -159,6 +159,29 @@ impl FakeStore {
 }
 
 impl SemanticIndexStore for FakeStore {
+    fn reconcile_collection(
+        &mut self,
+        _update: &kv_application::CollectionIndexUpdate,
+        _at: Timestamp,
+    ) -> Result<(), SemanticIndexStoreError> {
+        Ok(())
+    }
+
+    fn semantic_enabled(
+        &self,
+        _collection: &CollectionName,
+    ) -> Result<bool, SemanticIndexStoreError> {
+        Ok(true)
+    }
+
+    fn set_semantic_enabled(
+        &mut self,
+        _collection: &CollectionName,
+        _enabled: bool,
+    ) -> Result<(), SemanticIndexStoreError> {
+        Ok(())
+    }
+
     fn targets(&self) -> Result<Vec<kv_application::EmbedTarget>, SemanticIndexStoreError> {
         self.targets
             .iter()
@@ -341,6 +364,34 @@ impl SemanticIndexStore for FakeStore {
             count,
         ));
         Ok(count)
+    }
+
+    fn rebuild_all(
+        &mut self,
+        model: &EmbeddingModel,
+        reranker: Option<&RerankerModel>,
+        _embedded_at: Timestamp,
+        collections: &[kv_application::PreparedSemanticCollection],
+    ) -> Result<(), SemanticIndexStoreError> {
+        if self.fail_rebuild || self.fail_store {
+            return Err(SemanticIndexStoreError::Storage(Box::new(
+                std::io::Error::other("atomic rebuild failed"),
+            )));
+        }
+        self.rebuilds
+            .borrow_mut()
+            .extend(collections.iter().map(|batch| {
+                (
+                    batch.collection.display_name().to_owned(),
+                    model.as_str().to_owned(),
+                    batch.embeddings.len(),
+                )
+            }));
+        *self.recorded_model.borrow_mut() = Some(model.as_str().to_owned());
+        if let Some(reranker) = reranker {
+            *self.recorded_reranker.borrow_mut() = Some(reranker.as_str().to_owned());
+        }
+        Ok(())
     }
 }
 
@@ -816,7 +867,7 @@ fn unknown_collection_fails_when_explicitly_targeted() -> Result<(), Box<dyn Err
     Ok(())
 }
 
-/// Covers: FR-015 — a per-collection failure is reported and processing continues.
+/// Covers: REQ-022 FR-010/FR-011 — staged inference failure aborts before model commit.
 #[test]
 fn per_collection_failure_is_reported_and_processing_continues() -> Result<(), Box<dyn Error>> {
     let mut store = FakeStore::default();
@@ -849,23 +900,16 @@ fn per_collection_failure_is_reported_and_processing_continues() -> Result<(), B
         FakeReranker::default(),
     );
 
-    let report = use_case.execute(EmbedScope::All, None, None, false, &mut |_| {})?;
-
-    assert_eq!(report.outcomes().len(), 2);
-    assert!(report.any_failed());
-    assert_eq!(
-        report
-            .outcomes()
-            .iter()
-            .filter(|outcome| outcome.is_failed())
-            .count(),
-        2
-    );
+    let error = use_case
+        .execute(EmbedScope::All, None, None, false, &mut |_| {})
+        .err()
+        .ok_or("staged inference failure must abort the global rebuild")?;
+    assert!(matches!(error, kv_application::EmbedError::Generator(_)));
 
     Ok(())
 }
 
-/// Covers: FR-005 — a failed rebuild reports a failure for that collection.
+/// Covers: REQ-022 FR-011 — a failed atomic commit leaves the global model unset.
 #[test]
 fn failed_rebuild_reports_a_failure() -> Result<(), Box<dyn Error>> {
     let mut store = FakeStore::default();
@@ -878,6 +922,7 @@ fn failed_rebuild_reports_a_failure() -> Result<(), Box<dyn Error>> {
         vec![(1, "body".to_owned(), 0, "borrowing".to_owned())],
     );
     store.fail_rebuild = true;
+    let recorded_model = Rc::clone(&store.recorded_model);
     let generator = FakeGenerator {
         available: true,
         supported: supported("all-MiniLM-L6-v2"),
@@ -890,14 +935,12 @@ fn failed_rebuild_reports_a_failure() -> Result<(), Box<dyn Error>> {
         FakeReranker::default(),
     );
 
-    let report = use_case.execute(EmbedScope::All, None, None, false, &mut |_| {})?;
-
-    assert!(report.any_failed());
-    assert!(matches!(
-        report.outcomes().first(),
-        Some(EmbedOutcome::Failed { collection, .. })
-            if collection.display_name() == "Notes"
-    ));
+    let error = use_case
+        .execute(EmbedScope::All, None, None, false, &mut |_| {})
+        .err()
+        .ok_or("failed atomic commit must abort")?;
+    assert!(matches!(error, kv_application::EmbedError::Store(_)));
+    assert!(recorded_model.borrow().is_none());
 
     Ok(())
 }
@@ -1174,8 +1217,7 @@ fn emits_no_progress_for_skipped_or_current_collections() -> Result<(), Box<dyn 
     Ok(())
 }
 
-/// Covers: REQ-018 FR-007 — a mid-run embedding failure stops progress events
-/// and yields the Failed outcome.
+/// Covers: REQ-022 FR-011 — inference failure stops staging before the atomic commit.
 #[test]
 fn stops_progress_events_when_embedding_fails() -> Result<(), Box<dyn Error>> {
     let mut store = FakeStore::default();
@@ -1228,14 +1270,13 @@ fn stops_progress_events_when_embedding_fails() -> Result<(), Box<dyn Error>> {
         }
     };
 
-    let report = use_case.execute(EmbedScope::All, None, None, false, &mut progress)?;
+    let error = use_case
+        .execute(EmbedScope::All, None, None, false, &mut progress)
+        .err()
+        .ok_or("failed staging must abort the global rebuild")?;
 
     assert_eq!(*events.borrow(), vec!["Notes:1/3".to_owned()]);
-    assert!(matches!(
-        report.outcomes().first(),
-        Some(EmbedOutcome::Failed { collection, .. })
-            if collection.display_name() == "Notes"
-    ));
+    assert!(matches!(error, kv_application::EmbedError::Generator(_)));
 
     Ok(())
 }

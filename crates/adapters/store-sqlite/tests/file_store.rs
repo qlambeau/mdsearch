@@ -36,7 +36,7 @@ fn table_count(connection: &Connection, table: &str) -> Result<i64, Box<dyn Erro
 
 /// Covers: REQ-021 FR-012 and schema-v8 table creation.
 #[test]
-fn open_creates_the_tables_at_version_eight() -> Result<(), Box<dyn Error>> {
+fn open_creates_the_tables_at_version_nine() -> Result<(), Box<dyn Error>> {
     let directory = tempdir()?;
     let database_path = directory.path().join("collections.db");
     SqliteCollectionStore::open(&database_path)?;
@@ -77,7 +77,7 @@ fn open_creates_the_tables_at_version_eight() -> Result<(), Box<dyn Error>> {
 }
 
 fn assert_counts(version: i64, counts: &[(&str, i64)]) {
-    assert_eq!(version, 8);
+    assert_eq!(version, 9);
     for (name, count) in counts {
         assert_eq!(*count, 1, "unexpected count for {name}");
     }
@@ -208,7 +208,7 @@ fn migrates_a_version_one_database_to_current() -> Result<(), Box<dyn Error>> {
             row.get(0)
         })?;
 
-    assert_eq!(version, 8);
+    assert_eq!(version, 9);
 
     Ok(())
 }
@@ -269,7 +269,7 @@ fn migrates_a_version_three_database_to_current() -> Result<(), Box<dyn Error>> 
         |row| row.get(0),
     )?;
 
-    assert_eq!(version, 8);
+    assert_eq!(version, 9);
     assert_eq!(offset_column, 1);
 
     Ok(())

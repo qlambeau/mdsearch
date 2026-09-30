@@ -3,8 +3,8 @@ use kv_domain::{
 };
 
 use crate::{
-    Clock, EmbedError, EmbeddingGenerator, RerankError, Reranker, SemanticIndexStore,
-    SemanticIndexStoreError,
+    Clock, EmbedError, EmbeddingGenerator, PreparedSemanticCollection, RerankError, Reranker,
+    SemanticIndexStore, SemanticIndexStoreError,
 };
 
 /// The scope of an embed operation.
@@ -178,8 +178,21 @@ where
         download: bool,
         progress: &mut dyn FnMut(EmbedProgress),
     ) -> Result<EmbedReport, EmbedError> {
+        if let EmbedScope::Collection(collection) = scope
+            && !self.store.semantic_enabled(collection)?
+        {
+            return Err(EmbedError::SemanticDisabled);
+        }
+
         if let Some(reranker_model) = reranker {
             self.provision_reranker(reranker_model, download)?;
+        }
+
+        if model.is_none()
+            && let Some(reranker_model) = reranker
+        {
+            self.store.set_reranker_model(reranker_model)?;
+            return Ok(EmbedReport::new());
         }
 
         let recorded = self.store.global_model()?;
@@ -190,26 +203,113 @@ where
 
         self.generator.ensure_available(&effective, download)?;
 
-        if recorded.as_ref() != Some(&effective) {
-            self.store.set_global_model(&effective)?;
+        let model_changed = recorded.as_ref() != Some(&effective);
+        if model_changed {
+            return self.rebuild_for_model(&effective, reranker, scope, progress);
         }
-        let model_changed = model.is_some_and(|given| recorded.as_ref() != Some(given));
 
+        if let Some(reranker_model) = reranker {
+            self.store.set_reranker_model(reranker_model)?;
+        }
+        self.embed_selected(scope, &effective, progress)
+    }
+
+    fn rebuild_for_model(
+        &mut self,
+        model: &EmbeddingModel,
+        reranker: Option<&RerankerModel>,
+        scope: EmbedScope<'_>,
+        progress: &mut dyn FnMut(EmbedProgress),
+    ) -> Result<EmbedReport, EmbedError> {
         let mut report = EmbedReport::new();
         let now = self.clock.now()?;
-        let mut process = self.resolve_targets(scope, &mut report)?;
+        let selected = self.resolve_targets(scope, &mut report)?;
+        let collections = self.model_rebuild_targets(selected)?;
+        let mut batches = Vec::with_capacity(collections.len());
+        for collection in collections {
+            batches.push(self.prepare_collection(&collection, model, progress)?);
+        }
+        self.store.rebuild_all(model, reranker, now, &batches)?;
+        for batch in batches {
+            report.push(EmbedOutcome::Embedded {
+                collection: batch.collection,
+                passage_count: batch.embeddings.len(),
+            });
+        }
+        Ok(report)
+    }
 
-        if model_changed {
-            for collection in self.store.embedded_collections()? {
-                if !process.iter().any(|name| name == &collection) {
-                    process.push(collection);
-                }
+    fn model_rebuild_targets(
+        &self,
+        mut selected: Vec<CollectionName>,
+    ) -> Result<Vec<CollectionName>, EmbedError> {
+        for target in self.store.targets()? {
+            if self.store.semantic_enabled(target.collection())?
+                && target.has_files()
+                && target.lexical_built()
+                && !selected.iter().any(|name| name == target.collection())
+            {
+                selected.push(target.collection().clone());
             }
         }
+        for collection in self.store.embedded_collections()? {
+            if self.store.semantic_enabled(&collection)?
+                && !selected.iter().any(|name| name == &collection)
+            {
+                selected.push(collection);
+            }
+        }
+        Ok(selected)
+    }
 
-        for collection in process {
-            let outcome = self.embed_collection(&collection, &effective, now, progress);
-            match outcome {
+    fn prepare_collection(
+        &self,
+        collection: &CollectionName,
+        model: &EmbeddingModel,
+        progress: &mut dyn FnMut(EmbedProgress),
+    ) -> Result<PreparedSemanticCollection, EmbedError> {
+        let passages = self.store.passages(collection)?;
+        let groups = group_passages(passages);
+        let total_files = groups.len();
+        let mut pairs = Vec::new();
+        for (index, (_, file_passages)) in groups.iter().enumerate() {
+            let texts = file_passages
+                .iter()
+                .map(SemanticPassage::text)
+                .collect::<Vec<_>>();
+            let vectors = self.generator.embed(model, &texts)?;
+            let file_pairs = build_pairs(file_passages.clone(), vectors).ok_or_else(|| {
+                EmbedError::Generator(crate::EmbeddingError::Storage(Box::new(
+                    std::io::Error::other("embedding count does not match passage count"),
+                )))
+            })?;
+            pairs.extend(file_pairs);
+            progress(EmbedProgress::Files {
+                collection: collection.clone(),
+                completed_files: index + 1,
+                total_files,
+            });
+        }
+        progress(EmbedProgress::Writing {
+            collection: collection.clone(),
+        });
+        Ok(PreparedSemanticCollection {
+            collection: collection.clone(),
+            embeddings: pairs,
+        })
+    }
+
+    fn embed_selected(
+        &mut self,
+        scope: EmbedScope<'_>,
+        model: &EmbeddingModel,
+        progress: &mut dyn FnMut(EmbedProgress),
+    ) -> Result<EmbedReport, EmbedError> {
+        let mut report = EmbedReport::new();
+        let now = self.clock.now()?;
+        let collections = self.resolve_targets(scope, &mut report)?;
+        for collection in collections {
+            match self.embed_collection(&collection, model, now, progress) {
                 Ok(outcome) => report.push(outcome),
                 Err(message) => report.push(EmbedOutcome::Failed {
                     collection,
@@ -217,7 +317,6 @@ where
                 }),
             }
         }
-
         Ok(report)
     }
 
@@ -246,10 +345,6 @@ where
                 return Err(EmbedError::Reranker(RerankError::Storage(source)));
             }
         }
-        let recorded = self.store.reranker_model()?;
-        if recorded.as_ref() != Some(reranker_model) {
-            self.store.set_reranker_model(reranker_model)?;
-        }
         Ok(())
     }
 
@@ -262,6 +357,9 @@ where
             EmbedScope::All => {
                 let mut process = Vec::new();
                 for target in self.store.targets()? {
+                    if !self.store.semantic_enabled(target.collection())? {
+                        continue;
+                    }
                     if !target.has_files() {
                         report.push(EmbedOutcome::Skipped {
                             collection: target.collection().clone(),
@@ -410,4 +508,15 @@ fn build_pairs(
         return None;
     }
     Some(passages.into_iter().zip(vectors).collect())
+}
+
+fn group_passages(passages: Vec<SemanticPassage>) -> Vec<(FileId, Vec<SemanticPassage>)> {
+    let mut groups: Vec<(FileId, Vec<SemanticPassage>)> = Vec::new();
+    for passage in passages {
+        match groups.iter_mut().find(|(file, _)| *file == passage.file()) {
+            Some((_, file_passages)) => file_passages.push(passage),
+            None => groups.push((passage.file(), vec![passage])),
+        }
+    }
+    groups
 }

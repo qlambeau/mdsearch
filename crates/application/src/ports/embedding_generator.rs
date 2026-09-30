@@ -2,8 +2,39 @@ use kv_domain::{Embedding, EmbeddingModel};
 
 use crate::EmbeddingError;
 
+/// Describes a supported local model and whether its assets are cached.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModelAvailability {
+    name: String,
+    available: bool,
+}
+
+impl ModelAvailability {
+    /// Creates one supported-model availability entry.
+    #[must_use]
+    pub const fn new(name: String, available: bool) -> Self {
+        Self { name, available }
+    }
+
+    /// Returns the canonical model name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns whether the model assets are cached locally.
+    #[must_use]
+    pub const fn available(&self) -> bool {
+        self.available
+    }
+}
+
 /// Generates local text embeddings for the semantic index.
 pub trait EmbeddingGenerator {
+    /// Returns supported embedding models and local cache state.
+    fn models(&self) -> Vec<ModelAvailability> {
+        Vec::new()
+    }
     /// Ensures the model's assets are available locally, downloading them when
     /// `download` is set.
     ///

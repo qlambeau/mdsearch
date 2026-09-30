@@ -1,9 +1,86 @@
+use std::path::{Path, PathBuf};
+
 use kv_domain::{
     CollectionName, ContentHash, Embedding, EmbeddingModel, RerankerModel, SemanticIndexStatus,
     SemanticPassage, Timestamp,
 };
 
-use crate::SemanticIndexStoreError;
+use crate::{FileRecord, SemanticIndexStoreError};
+
+/// A passage embedding whose file identifier is resolved inside the commit transaction.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PreparedSemanticPassage {
+    path: PathBuf,
+    kind: kv_domain::PassageKind,
+    position: usize,
+    embedding: Embedding,
+}
+
+impl PreparedSemanticPassage {
+    /// Creates a staged vector for the passage at `path`.
+    #[must_use]
+    pub const fn new(
+        path: PathBuf,
+        kind: kv_domain::PassageKind,
+        position: usize,
+        embedding: Embedding,
+    ) -> Self {
+        Self {
+            path,
+            kind,
+            position,
+            embedding,
+        }
+    }
+
+    /// Returns the source file path.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Returns the passage kind.
+    #[must_use]
+    pub const fn kind(&self) -> kv_domain::PassageKind {
+        self.kind
+    }
+
+    /// Returns the passage position within its file.
+    #[must_use]
+    pub const fn position(&self) -> usize {
+        self.position
+    }
+
+    /// Returns the staged vector.
+    #[must_use]
+    pub const fn embedding(&self) -> &Embedding {
+        &self.embedding
+    }
+}
+
+/// File and semantic-index changes to commit for one collection update.
+#[derive(Clone, Debug)]
+pub struct CollectionIndexUpdate {
+    /// Collection being reconciled.
+    pub collection: CollectionName,
+    /// Complete current source files to upsert.
+    pub upsert: Vec<FileRecord>,
+    /// Stored paths that no longer exist in registered sources.
+    pub delete: Vec<PathBuf>,
+    /// Embeddings staged before the write transaction for enabled collections.
+    pub semantic: Vec<PreparedSemanticPassage>,
+    /// Global model that produced the staged vectors.
+    pub model: EmbeddingModel,
+}
+
+/// Prepared embeddings for one collection in a global model rebuild.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PreparedSemanticCollection {
+    /// Collection whose vectors are being replaced.
+    pub collection: CollectionName,
+    /// Passage identities and vectors prepared before storage mutation.
+    pub embeddings: Vec<(SemanticPassage, Embedding)>,
+}
 
 /// A collection eligible for semantic indexing, with its embed prerequisites.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -45,6 +122,38 @@ impl EmbedTarget {
 
 /// Reads and writes the semantic (vector) index and its global model.
 pub trait SemanticIndexStore {
+    /// Returns whether semantic indexing is enabled for `collection`.
+    ///
+    /// # Errors
+    ///
+    /// Returns not-found when the collection does not exist, or storage errors.
+    fn semantic_enabled(
+        &self,
+        collection: &CollectionName,
+    ) -> Result<bool, SemanticIndexStoreError>;
+
+    /// Persists whether semantic indexing is enabled for `collection`.
+    ///
+    /// # Errors
+    ///
+    /// Returns not-found when the collection does not exist, or storage errors.
+    fn set_semantic_enabled(
+        &mut self,
+        collection: &CollectionName,
+        enabled: bool,
+    ) -> Result<(), SemanticIndexStoreError>;
+
+    /// Atomically commits file, lexical, graph, and semantic state for one collection.
+    ///
+    /// # Errors
+    ///
+    /// Returns not-found or storage failure; errors roll back the complete collection update.
+    fn reconcile_collection(
+        &mut self,
+        update: &CollectionIndexUpdate,
+        at: Timestamp,
+    ) -> Result<(), SemanticIndexStoreError>;
+
     /// Returns every collection's embed eligibility.
     ///
     /// # Errors
@@ -158,4 +267,17 @@ pub trait SemanticIndexStore {
         embedded_at: Timestamp,
         embeddings: &[(SemanticPassage, Embedding)],
     ) -> Result<usize, SemanticIndexStoreError>;
+
+    /// Atomically switches the global embedding model and replaces all supplied indexes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error if any setting, dimension, vector, or state write fails.
+    fn rebuild_all(
+        &mut self,
+        model: &EmbeddingModel,
+        reranker: Option<&RerankerModel>,
+        embedded_at: Timestamp,
+        collections: &[PreparedSemanticCollection],
+    ) -> Result<(), SemanticIndexStoreError>;
 }

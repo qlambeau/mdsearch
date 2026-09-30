@@ -14,6 +14,7 @@ mod index_status;
 mod lexical_search;
 mod list_collections;
 mod ports;
+mod semantic_update;
 mod update_collection;
 
 pub use add_files::{AddFiles, AddFilesOutcome};
@@ -37,11 +38,13 @@ pub use list_collections::ListCollections;
 #[cfg(test)]
 pub use ports::collection_source_store_fake;
 pub use ports::{
-    Clock, CollectionSourceStore, CollectionSourceSummary, CollectionStore, EmbedTarget,
-    EmbeddingGenerator, FileRecord, FileRetrievalStore, FileStore, FileSystem, GraphStore,
-    HybridCandidate, HybridCandidates, HybridSearchStore, InMemoryGraphStore, IndexState,
-    IndexStatus, LexicalIndexStore, LexicalSearchStore, Neighbor, Position, ReconcileOutcome,
-    Reranker, RetrievedFile, SearchResult, SearchResultSet, SearchScope, SemanticIndexStore,
-    SemanticStatus, StoredFile, traverse_graph,
+    Clock, CollectionIndexUpdate, CollectionSourceStore, CollectionSourceSummary, CollectionStore,
+    EmbedTarget, EmbeddingGenerator, FileRecord, FileRetrievalStore, FileStore, FileSystem,
+    GraphStore, HybridCandidate, HybridCandidates, HybridSearchStore, InMemoryGraphStore,
+    IndexState, IndexStatus, LexicalIndexStore, LexicalSearchStore, ModelAvailability, Neighbor,
+    Position, PreparedSemanticCollection, PreparedSemanticPassage, ReconcileOutcome, Reranker,
+    RetrievedFile, SearchResult, SearchResultSet, SearchScope, SemanticIndexStore, SemanticStatus,
+    StoredFile, traverse_graph,
 };
+pub use semantic_update::{SemanticUpdateCoordinator, SemanticUpdatePorts};
 pub use update_collection::{UpdateCollection, UpdateOutcome, UpdateTarget};

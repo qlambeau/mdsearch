@@ -166,6 +166,7 @@ Commands that need a default path require `HOME`; help and version do not.
 
 Create a collection and register optional Markdown file or directory sources.
 Source paths are canonicalized and saved without indexing their contents.
+Semantic indexing is disabled by default; pass `--semantic` to opt in.
 
 | Option | Description |
 | --- | --- |
@@ -177,17 +178,23 @@ mdsearch collection create Notes
 
 mdsearch collection create Notes ~/vault
 # created collection "Notes"
+
+mdsearch collection create Notes ~/vault --semantic
+# created collection "Notes"
 ```
 
 Names are normalized for comparison; creating an equivalent name again fails
 with a duplicate error.
 
-### `collection configure NAME --sources PATH...`
+### `collection configure NAME [--sources PATH...] [--semantic on|off]`
 
-Replace a collection's registered source list. The change does not index files.
+Replace a collection's registered source list and/or enable or disable semantic
+indexing. These changes do not index files. Disabling semantic indexing removes
+that collection's vectors during its next successful update.
 
 ```sh
 mdsearch collection configure Notes --sources ~/vault ~/reference.md
+mdsearch collection configure Notes --semantic on
 ```
 
 ### `collection list [--json]`
@@ -229,17 +236,18 @@ mdsearch collection add Notes ~/vault
 
 ### `collection update --collection NAME` / `collection update --all`
 
-Re-index a collection (or all collections), reconciling files against the
-filesystem. This is the main indexing command: it upserts added/modified files,
-deletes removed ones, rebuilds the **lexical index**, and rebuilds the
-**entity graph** for each updated collection in one transaction. It does not
-build the semantic index (see [`embed`](#embed)).
+Update a collection (or all collections) from registered sources. The command
+discovers additions and modifications, removes files that disappeared from the
+registered sources, and rebuilds the **lexical index** and **entity graph**. If
+semantic indexing is enabled, it also refreshes that collection's vectors. All
+configured indexes and stored files commit atomically per collection.
 
 | Option | Description |
 | --- | --- |
 | `--collection NAME` | Update one collection from its registered sources. |
 | `--all` | Update every collection in the database, continuing after failures. |
 | `--skip-unreadable` | Skip unreadable files and continue, reporting the skipped count. |
+| `--download` | Download semantic model assets when semantic indexing is enabled. |
 | `--database PATH` | Database file to use. |
 
 Collections created before source registration must be configured before update.
@@ -250,12 +258,14 @@ mdsearch collection update --collection Notes
 ```
 
 The update is transactional per collection: if indexing fails, the collection's
-previous file/lexical/graph state is preserved.
+previous file and index state is preserved. `--all` continues after an
+individual collection fails and exits unsuccessfully with a per-collection
+report.
 
 ### `index status`
 
-Report lexical index state for each collection (file count, passage count, and
-last build time).
+Report index readiness, semantic model, file and passage counts, and last build
+times for each collection.
 
 ```sh
 mdsearch index status
@@ -296,10 +306,29 @@ mdsearch get Notes 3
 When the name is ambiguous (more than one file shares the basename), the command
 reports the candidate paths.
 
-### `embed`
+### `model list` and `model set`
 
-Build the semantic (vector) index for one or all collections, optionally
-selecting the embedding model and re-ranker.
+List supported embedding and re-ranker models with local availability, then
+select database-wide models. Changing the embedding model rebuilds semantic
+indexes for every semantically enabled collection in one atomic operation.
+The re-ranker can also be changed by itself without rebuilding vectors.
+
+```sh
+mdsearch model list
+mdsearch model list --json
+mdsearch model set all-MiniLM-L6-v2 --download
+mdsearch model set --reranker bge-reranker-base --download
+```
+
+Model assets are downloaded only when `--download` is supplied. A failed model
+change leaves the previous model selection and semantic indexes intact.
+
+### `embed` (transitional)
+
+Build the semantic (vector) index for one or all collections that have semantic
+indexing enabled. Configure a collection with `collection create --semantic`
+or `collection configure --semantic on` first. New workflows should use
+`collection update`, which refreshes every configured index together.
 
 | Option | Description |
 | --- | --- |
@@ -327,7 +356,8 @@ as downloaded once its completion marker exists there, regardless of the
 working directory you run `mdsearch` from.
 
 Embedding is skipped for collections with no files or no lexical index, and
-skipped when the index is already current for the file set.
+skipped when the index is already current for the file set. `embed` rejects a
+collection whose semantic policy is disabled; it never enables the policy.
 
 ### `hybrid QUERY`
 
@@ -511,13 +541,14 @@ Scalar or inline list values are supported (e.g. `tags: rust` or
 
 - `collection add` stores files; nothing is indexed yet.
 - `collection update` reconciles the file set (adds/modifies/deletes) and
-  rebuilds the **lexical index** and **entity graph** for each updated
-  collection. It is deterministic and idempotent: re-running on unchanged files
-  changes nothing.
-- `embed` builds the **semantic index** from the stored files/passages; it is
-  skipped when already current for the file set.
-- There is no file watching. Re-run `update` (and `embed` when semantic results
-  matter) after changing files on disk.
+  rebuilds the **lexical index**, **entity graph**, and enabled **semantic
+  index** for each updated collection. It is deterministic and idempotent:
+  re-running on unchanged files changes nothing.
+- Semantic indexing is opt-in per collection. Configuration changes take
+  effect during the next successful update; turning it off clears that
+  collection's vectors during the update.
+- There is no file watching. Re-run `collection update` after changing files on
+  disk.
 - Existing databases migrate forward automatically when opened; migration is
   idempotent and never rewrites stored file, lexical, or semantic data.
 

@@ -32,7 +32,7 @@ pub use graph::SqliteGraphStore;
 pub use hybrid::SqliteHybridSearchStore;
 
 /// The current database schema version applied by [`migrate`].
-const CURRENT_SCHEMA_VERSION: i64 = 8;
+const CURRENT_SCHEMA_VERSION: i64 = 9;
 
 /// The schema version at which the lexical index tables exist.
 const INDEX_SCHEMA_VERSION: i64 = 3;
@@ -150,7 +150,8 @@ fn migrate(connection: &Connection) -> Result<(), rusqlite::Error> {
             collection_id INTEGER PRIMARY KEY,
             display_name TEXT NOT NULL,
             name_key TEXT NOT NULL UNIQUE,
-            created_at INTEGER NOT NULL
+            created_at INTEGER NOT NULL,
+            semantic_enabled INTEGER NOT NULL DEFAULT 0 CHECK (semantic_enabled IN (0, 1))
         );
         CREATE TABLE IF NOT EXISTS files (
             file_id INTEGER PRIMARY KEY,
@@ -211,6 +212,20 @@ fn migrate(connection: &Connection) -> Result<(), rusqlite::Error> {
     )?;
 
     if version < CURRENT_SCHEMA_VERSION {
+        if version < 9 && !table_has_column(connection, "collections", "semantic_enabled")? {
+            connection.execute(
+                "ALTER TABLE collections ADD COLUMN semantic_enabled INTEGER NOT NULL DEFAULT 0 CHECK (semantic_enabled IN (0, 1))",
+                [],
+            )?;
+            connection.execute(
+                "UPDATE collections SET semantic_enabled = 1
+                 WHERE EXISTS (
+                     SELECT 1 FROM semantic_index_state state
+                     WHERE state.collection_id = collections.collection_id
+                 )",
+                [],
+            )?;
+        }
         if version < 4 && !table_has_column(connection, "passage_files", "byte_offset")? {
             connection.execute(
                 "ALTER TABLE passage_files ADD COLUMN byte_offset INTEGER NOT NULL DEFAULT 0",
@@ -644,6 +659,36 @@ impl FileStore for SqliteFileStore {
 
         let malformed = rebuild_index(&transaction, collection_id, ingested_at)?;
         rebuild_graph(&transaction, collection_id, ingested_at)?;
+        let semantic_enabled = transaction
+            .query_row(
+                "SELECT semantic_enabled FROM collections WHERE collection_id = ?1",
+                params![collection_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(file_storage_failure)?;
+        if semantic_enabled == 0 {
+            let embeddings_exist: bool = transaction
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'embeddings')",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(file_storage_failure)?;
+            if embeddings_exist {
+                transaction
+                    .execute(
+                        "DELETE FROM embeddings WHERE collection_id = ?1",
+                        params![collection_id],
+                    )
+                    .map_err(file_storage_failure)?;
+            }
+            transaction
+                .execute(
+                    "DELETE FROM semantic_index_state WHERE collection_id = ?1",
+                    params![collection_id],
+                )
+                .map_err(file_storage_failure)?;
+        }
 
         transaction.commit().map_err(file_storage_failure)?;
 
@@ -1245,12 +1290,10 @@ impl SqliteLexicalSearchStore {
     }
 }
 
-/// Reads and writes the semantic index of an existing `SQLite` database.
-pub struct SqliteSemanticIndexStore {
-    connection: Connection,
-}
+/// Semantic-index view of the same connection used by [`SqliteFileStore`].
+pub type SqliteSemanticIndexStore = SqliteFileStore;
 
-impl SqliteSemanticIndexStore {
+impl SqliteFileStore {
     /// Opens an existing database for embedding, migrating it to the current
     /// schema version.
     ///
@@ -1273,7 +1316,412 @@ impl SqliteSemanticIndexStore {
     }
 }
 
+fn reconcile_files_and_indexes(
+    transaction: &Transaction<'_>,
+    update: &kv_application::CollectionIndexUpdate,
+    collection_id: i64,
+    at: i64,
+) -> Result<(), SemanticIndexStoreError> {
+    for file in &update.upsert {
+        upsert_file(transaction, collection_id, file, at).map_err(semantic_storage_failure)?;
+    }
+    for path in &update.delete {
+        transaction
+            .execute(
+                "DELETE FROM files WHERE collection_id = ?1 AND path = ?2",
+                params![collection_id, path.to_string_lossy().as_ref()],
+            )
+            .map_err(semantic_storage_failure)?;
+    }
+    rebuild_index(transaction, collection_id, at).map_err(semantic_storage_failure)?;
+    rebuild_graph(transaction, collection_id, at).map_err(semantic_storage_failure)
+}
+
+fn reconcile_semantic_update(
+    transaction: &Transaction<'_>,
+    update: &kv_application::CollectionIndexUpdate,
+    collection_id: i64,
+    active_dimension: i64,
+    at: i64,
+) -> Result<(), SemanticIndexStoreError> {
+    let enabled: bool = transaction
+        .query_row(
+            "SELECT semantic_enabled FROM collections WHERE collection_id = ?1",
+            params![collection_id],
+            |row| row.get::<_, i64>(0).map(|value| value != 0),
+        )
+        .map_err(semantic_storage_failure)?;
+    if !enabled {
+        return clear_semantic_collection(transaction, collection_id);
+    }
+    let table_exists = embeddings_table_exists(transaction)?;
+    let dimension = semantic_dimension(update, active_dimension)?;
+    ensure_semantic_dimension(transaction, table_exists, dimension, active_dimension)?;
+    ensure_configured_model(transaction, update)?;
+    if table_exists {
+        transaction
+            .execute(
+                "DELETE FROM embeddings WHERE collection_id = ?1",
+                params![collection_id],
+            )
+            .map_err(semantic_storage_failure)?;
+    }
+    insert_prepared_semantic(transaction, update, collection_id, dimension)?;
+    update_semantic_index_state(transaction, update, collection_id, dimension, at)
+}
+
+fn embeddings_table_exists(transaction: &Transaction<'_>) -> Result<bool, SemanticIndexStoreError> {
+    transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'embeddings')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(semantic_storage_failure)
+}
+
+fn clear_semantic_collection(
+    transaction: &Transaction<'_>,
+    collection_id: i64,
+) -> Result<(), SemanticIndexStoreError> {
+    if embeddings_table_exists(transaction)? {
+        transaction
+            .execute(
+                "DELETE FROM embeddings WHERE collection_id = ?1",
+                params![collection_id],
+            )
+            .map_err(semantic_storage_failure)?;
+    }
+    transaction
+        .execute(
+            "DELETE FROM semantic_index_state WHERE collection_id = ?1",
+            params![collection_id],
+        )
+        .map_err(semantic_storage_failure)?;
+    Ok(())
+}
+
+fn semantic_dimension(
+    update: &kv_application::CollectionIndexUpdate,
+    active_dimension: i64,
+) -> Result<i64, SemanticIndexStoreError> {
+    update
+        .semantic
+        .first()
+        .map(|passage| i64::try_from(passage.embedding().len()))
+        .transpose()
+        .map_err(semantic_storage_failure)
+        .map(|dimension| dimension.unwrap_or(active_dimension))
+}
+
+fn ensure_semantic_dimension(
+    transaction: &Transaction<'_>,
+    table_exists: bool,
+    dimension: i64,
+    active_dimension: i64,
+) -> Result<(), SemanticIndexStoreError> {
+    if table_exists && dimension != active_dimension {
+        return Err(semantic_storage_message(
+            "collection update embedding dimension differs from the active model",
+        ));
+    }
+    if !table_exists {
+        transaction
+            .execute_batch(&format!(
+                "CREATE VIRTUAL TABLE embeddings USING vector(
+                    dim={dimension}, type=float4, metric=cosine,
+                    metadata=\"collection_id INTEGER, file_id INTEGER, kind TEXT, position INTEGER\"
+                );"
+            ))
+            .map_err(semantic_storage_failure)?;
+        transaction
+            .execute(
+                "INSERT INTO settings(key, value) VALUES ('embedding_dimension', ?1)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![dimension],
+            )
+            .map_err(semantic_storage_failure)?;
+    }
+    Ok(())
+}
+
+fn ensure_configured_model(
+    transaction: &Transaction<'_>,
+    update: &kv_application::CollectionIndexUpdate,
+) -> Result<(), SemanticIndexStoreError> {
+    let configured: Option<String> = transaction
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'embed_model'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(semantic_storage_failure)?;
+    if configured
+        .as_deref()
+        .is_some_and(|configured| configured != update.model.as_str())
+    {
+        return Err(semantic_storage_message(
+            "staged vectors do not match the configured embedding model",
+        ));
+    }
+    transaction
+        .execute(
+            "INSERT INTO settings(key, value) VALUES ('embed_model', ?1)
+             ON CONFLICT(key) DO NOTHING",
+            params![update.model.as_str()],
+        )
+        .map_err(semantic_storage_failure)?;
+    Ok(())
+}
+
+fn insert_prepared_semantic(
+    transaction: &Transaction<'_>,
+    update: &kv_application::CollectionIndexUpdate,
+    collection_id: i64,
+    dimension: i64,
+) -> Result<(), SemanticIndexStoreError> {
+    for staged in &update.semantic {
+        if i64::try_from(staged.embedding().len()).map_err(semantic_storage_failure)? != dimension {
+            return Err(semantic_storage_message(
+                "staged embedding dimensions do not match",
+            ));
+        }
+        let path = staged.path().to_string_lossy();
+        let file_id: i64 = transaction
+            .query_row(
+                "SELECT file_id FROM files WHERE collection_id = ?1 AND path = ?2",
+                params![collection_id, path.as_ref()],
+                |row| row.get(0),
+            )
+            .map_err(semantic_storage_failure)?;
+        transaction
+            .execute(
+                "INSERT INTO embeddings(vector, collection_id, file_id, kind, position)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    vector_blob(staged.embedding().as_slice()),
+                    collection_id,
+                    file_id,
+                    staged.kind().as_str(),
+                    i64::try_from(staged.position()).map_err(semantic_storage_failure)?,
+                ],
+            )
+            .map_err(semantic_storage_failure)?;
+    }
+    Ok(())
+}
+
+fn update_semantic_index_state(
+    transaction: &Transaction<'_>,
+    update: &kv_application::CollectionIndexUpdate,
+    collection_id: i64,
+    dimension: i64,
+    at: i64,
+) -> Result<(), SemanticIndexStoreError> {
+    let fingerprint = fingerprint_for_collection(transaction, collection_id)?;
+    transaction
+        .execute(
+            "INSERT INTO semantic_index_state(
+                collection_id, file_set_fingerprint, model, dimension, passage_count, embedded_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(collection_id) DO UPDATE SET
+                file_set_fingerprint=excluded.file_set_fingerprint,
+                model=excluded.model, dimension=excluded.dimension,
+                passage_count=excluded.passage_count, embedded_at=excluded.embedded_at",
+            params![
+                collection_id,
+                fingerprint.as_str(),
+                update.model.as_str(),
+                dimension,
+                i64::try_from(update.semantic.len()).map_err(semantic_storage_failure)?,
+                at,
+            ],
+        )
+        .map_err(semantic_storage_failure)?;
+    Ok(())
+}
+
+fn semantic_storage_message(message: &'static str) -> SemanticIndexStoreError {
+    SemanticIndexStoreError::Storage(Box::new(std::io::Error::other(message)))
+}
+
+fn configure_global_vector_table(
+    transaction: &Transaction<'_>,
+    table_exists: bool,
+    current_dimension: i64,
+    next_dimension: i64,
+) -> Result<(), SemanticIndexStoreError> {
+    if !table_exists || current_dimension != next_dimension {
+        transaction
+            .execute_batch(&format!(
+                "DROP TABLE IF EXISTS embeddings;
+                 CREATE VIRTUAL TABLE embeddings USING vector(
+                     dim={next_dimension}, type=float4, metric=cosine,
+                     metadata=\"collection_id INTEGER, file_id INTEGER, kind TEXT, position INTEGER\"
+                 );"
+            ))
+            .map_err(semantic_storage_failure)?;
+    }
+    transaction
+        .execute(
+            "INSERT INTO settings(key, value) VALUES ('embedding_dimension', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![next_dimension],
+        )
+        .map_err(semantic_storage_failure)?;
+    Ok(())
+}
+
+fn store_global_models(
+    transaction: &Transaction<'_>,
+    model: &EmbeddingModel,
+    reranker: Option<&RerankerModel>,
+) -> Result<(), SemanticIndexStoreError> {
+    if let Some(reranker) = reranker {
+        transaction
+            .execute(
+                "INSERT INTO settings(key, value) VALUES ('reranker_model', ?1)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![reranker.as_str()],
+            )
+            .map_err(semantic_storage_failure)?;
+    }
+    transaction
+        .execute(
+            "INSERT INTO settings(key, value) VALUES ('embed_model', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![model.as_str()],
+        )
+        .map_err(semantic_storage_failure)?;
+    Ok(())
+}
+
+fn replace_collection_semantic(
+    transaction: &Transaction<'_>,
+    collection_id: i64,
+    fingerprint: &ContentHash,
+    model: &EmbeddingModel,
+    dimension: i64,
+    embedded_at: i64,
+    embeddings: &[(SemanticPassage, Embedding)],
+) -> Result<(), SemanticIndexStoreError> {
+    transaction
+        .execute(
+            "DELETE FROM embeddings WHERE collection_id = ?1",
+            params![collection_id],
+        )
+        .map_err(semantic_storage_failure)?;
+    insert_collection_embeddings(transaction, collection_id, dimension, embeddings)?;
+    let passage_count = i64::try_from(embeddings.len()).map_err(semantic_storage_failure)?;
+    transaction
+        .execute(
+            "INSERT INTO semantic_index_state(
+                collection_id, file_set_fingerprint, model, dimension, passage_count, embedded_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(collection_id) DO UPDATE SET
+                file_set_fingerprint=excluded.file_set_fingerprint,
+                model=excluded.model, dimension=excluded.dimension,
+                passage_count=excluded.passage_count, embedded_at=excluded.embedded_at",
+            params![
+                collection_id,
+                fingerprint.as_str(),
+                model.as_str(),
+                dimension,
+                passage_count,
+                embedded_at,
+            ],
+        )
+        .map_err(semantic_storage_failure)?;
+    Ok(())
+}
+
+fn insert_collection_embeddings(
+    transaction: &Transaction<'_>,
+    collection_id: i64,
+    dimension: i64,
+    embeddings: &[(SemanticPassage, Embedding)],
+) -> Result<(), SemanticIndexStoreError> {
+    for (passage, embedding) in embeddings {
+        if i64::try_from(embedding.len()).map_err(semantic_storage_failure)? != dimension {
+            return Err(semantic_storage_message(
+                "staged embedding dimensions do not match",
+            ));
+        }
+        let vector = vector_blob(embedding.as_slice());
+        let file_id = i64::try_from(passage.file().as_u64()).map_err(semantic_storage_failure)?;
+        let position = i64::try_from(passage.position()).map_err(semantic_storage_failure)?;
+        transaction
+            .execute(
+                "INSERT INTO embeddings(vector, collection_id, file_id, kind, position)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    vector,
+                    collection_id,
+                    file_id,
+                    passage.kind().as_str(),
+                    position
+                ],
+            )
+            .map_err(semantic_storage_failure)?;
+    }
+    Ok(())
+}
+
 impl SemanticIndexStore for SqliteSemanticIndexStore {
+    fn semantic_enabled(
+        &self,
+        collection: &CollectionName,
+    ) -> Result<bool, SemanticIndexStoreError> {
+        let enabled = self
+            .connection
+            .query_row(
+                "SELECT semantic_enabled FROM collections WHERE name_key = ?1",
+                params![collection.name_key()],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(semantic_storage_failure)?
+            .ok_or(SemanticIndexStoreError::CollectionNotFound)?;
+        Ok(enabled != 0)
+    }
+
+    fn set_semantic_enabled(
+        &mut self,
+        collection: &CollectionName,
+        enabled: bool,
+    ) -> Result<(), SemanticIndexStoreError> {
+        let changed = self
+            .connection
+            .execute(
+                "UPDATE collections SET semantic_enabled = ?1 WHERE name_key = ?2",
+                params![i64::from(enabled), collection.name_key()],
+            )
+            .map_err(semantic_storage_failure)?;
+        if changed == 0 {
+            return Err(SemanticIndexStoreError::CollectionNotFound);
+        }
+        Ok(())
+    }
+
+    fn reconcile_collection(
+        &mut self,
+        update: &kv_application::CollectionIndexUpdate,
+        at: Timestamp,
+    ) -> Result<(), SemanticIndexStoreError> {
+        let at = i64::try_from(at.as_unix_seconds()).map_err(semantic_storage_failure)?;
+        let active_dimension = self.active_dimension()?;
+        let transaction = self
+            .connection
+            .transaction()
+            .map_err(semantic_storage_failure)?;
+        let collection_id = resolve_collection_id(&transaction, &update.collection)
+            .map_err(semantic_storage_failure)?;
+        reconcile_files_and_indexes(&transaction, update, collection_id, at)?;
+        reconcile_semantic_update(&transaction, update, collection_id, active_dimension, at)?;
+        transaction.commit().map_err(semantic_storage_failure)
+    }
+
     fn targets(&self) -> Result<Vec<EmbedTarget>, SemanticIndexStoreError> {
         let has_index = schema_version(&self.connection).map_err(semantic_storage_failure)?
             >= INDEX_SCHEMA_VERSION;
@@ -1701,6 +2149,55 @@ impl SemanticIndexStore for SqliteSemanticIndexStore {
 
         Ok(embeddings.len())
     }
+
+    fn rebuild_all(
+        &mut self,
+        model: &EmbeddingModel,
+        reranker: Option<&RerankerModel>,
+        embedded_at: Timestamp,
+        collections: &[kv_application::PreparedSemanticCollection],
+    ) -> Result<(), SemanticIndexStoreError> {
+        let embedded_at =
+            i64::try_from(embedded_at.as_unix_seconds()).map_err(semantic_storage_failure)?;
+        let dimension = collections
+            .iter()
+            .flat_map(|collection| collection.embeddings.iter())
+            .next()
+            .map(|(_, embedding)| embedding.len());
+        let active = match dimension {
+            Some(value) => i64::try_from(value).map_err(semantic_storage_failure)?,
+            None => self.active_dimension()?,
+        };
+        let mut resolved = Vec::with_capacity(collections.len());
+        for batch in collections {
+            let collection_id = self
+                .resolve_collection_id(&batch.collection)
+                .map_err(semantic_storage_failure)?
+                .ok_or(SemanticIndexStoreError::CollectionNotFound)?;
+            let fingerprint = self.file_set_fingerprint(&batch.collection)?;
+            resolved.push((collection_id, fingerprint, &batch.embeddings));
+        }
+        let table_exists = self.embeddings_table_exists()?;
+        let current = self.active_dimension()?;
+        let transaction = self
+            .connection
+            .transaction()
+            .map_err(semantic_storage_failure)?;
+        configure_global_vector_table(&transaction, table_exists, current, active)?;
+        store_global_models(&transaction, model, reranker)?;
+        for (collection_id, fingerprint, embeddings) in resolved {
+            replace_collection_semantic(
+                &transaction,
+                collection_id,
+                &fingerprint,
+                model,
+                active,
+                embedded_at,
+                embeddings,
+            )?;
+        }
+        transaction.commit().map_err(semantic_storage_failure)
+    }
 }
 
 impl SqliteSemanticIndexStore {
@@ -1766,12 +2263,10 @@ fn semantic_storage_failure(error: impl Error + Send + Sync + 'static) -> Semant
     SemanticIndexStoreError::Storage(Box::new(error))
 }
 
-/// Retrieves stored files from an existing `SQLite` database.
-pub struct SqliteFileRetrievalStore {
-    connection: Connection,
-}
+/// Retrieval view of the same connection used by [`SqliteFileStore`].
+pub type SqliteFileRetrievalStore = SqliteFileStore;
 
-impl SqliteFileRetrievalStore {
+impl SqliteFileStore {
     /// Opens an existing database without creating or initializing it.
     ///
     /// # Errors
@@ -1899,6 +2394,33 @@ fn resolve_collection_id(
         .optional()
         .map_err(file_storage_failure)?
         .ok_or(FileStoreError::CollectionNotFound)
+}
+
+fn fingerprint_for_collection(
+    connection: &Connection,
+    collection_id: i64,
+) -> Result<ContentHash, SemanticIndexStoreError> {
+    let mut statement = connection
+        .prepare("SELECT path, content_hash FROM files WHERE collection_id = ?1 ORDER BY path")
+        .map_err(semantic_storage_failure)?;
+    let rows = statement
+        .query_map(params![collection_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(semantic_storage_failure)?;
+    let mut files = Vec::new();
+    for row in rows {
+        let (path, hash) = row.map_err(semantic_storage_failure)?;
+        files.push((
+            PathBuf::from(path),
+            ContentHash::try_from_hex(&hash).map_err(semantic_storage_failure)?,
+        ));
+    }
+    let paths = files
+        .iter()
+        .map(|(path, hash)| (path.as_path(), hash))
+        .collect::<Vec<_>>();
+    Ok(file_set_fingerprint(&paths))
 }
 
 fn upsert_file(

@@ -51,6 +51,8 @@ pub(crate) enum Command {
         after_help = "Example: mdsearch embed --collection Notes --download"
     )]
     Embed(EmbedArgs),
+    #[command(subcommand, about = "List or change local semantic models")]
+    Model(ModelCommand),
     #[command(
         about = "Search using lexical and semantic indexes",
         after_help = "Example: mdsearch hybrid \"borrowing rules\" --collection Notes"
@@ -131,6 +133,30 @@ pub(crate) enum IndexCommand {
         after_help = "Example: mdsearch index status"
     )]
     Status(IndexStatusArgs),
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum ModelCommand {
+    #[command(about = "List supported models and local availability")]
+    List(ModelListArgs),
+    #[command(about = "Change the database-wide embedding or re-ranker model")]
+    Set(ModelSetArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ModelListArgs {
+    #[arg(long, help = "write model availability as JSON")]
+    pub(crate) json: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ModelSetArgs {
+    #[arg(value_name = "NAME", help = "embedding model name")]
+    pub(crate) model: Option<String>,
+    #[arg(long, value_name = "NAME", help = "re-ranker model name")]
+    pub(crate) reranker: Option<String>,
+    #[arg(long, help = "download model assets if unavailable locally")]
+    pub(crate) download: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -246,6 +272,8 @@ pub(crate) struct CreateCollectionArgs {
     pub(crate) name: String,
     #[arg(value_name = "PATH", num_args = 1.., help = "Markdown file or directory source")]
     pub(crate) paths: Vec<PathBuf>,
+    #[arg(long, help = "enable semantic indexing for this collection")]
+    pub(crate) semantic: bool,
 }
 
 #[derive(Debug, Args)]
@@ -258,8 +286,10 @@ pub(crate) struct ListCollectionsArgs {
 pub(crate) struct ConfigureCollectionArgs {
     #[arg(value_name = "NAME", help = "collection to configure")]
     pub(crate) name: String,
-    #[arg(long = "sources", value_name = "PATH", required = true, num_args = 1.., help = "replacement Markdown file or directory sources")]
+    #[arg(long = "sources", value_name = "PATH", num_args = 1.., help = "replacement Markdown file or directory sources")]
     pub(crate) paths: Vec<PathBuf>,
+    #[arg(long, value_name = "on|off", value_parser = ["on", "off"], help = "enable or disable semantic indexing")]
+    pub(crate) semantic: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -295,4 +325,9 @@ pub(crate) struct UpdateCollectionArgs {
     pub(crate) legacy_paths: Vec<PathBuf>,
     #[arg(long, help = "skip unreadable files and continue updating")]
     pub(crate) skip_unreadable: bool,
+    #[arg(
+        long,
+        help = "download model assets required for enabled semantic indexes"
+    )]
+    pub(crate) download: bool,
 }

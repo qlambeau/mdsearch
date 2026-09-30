@@ -247,6 +247,7 @@ fn explicit_paths_reach_model_check_without_home() -> Result<(), Box<dyn Error>>
             "collection",
             "create",
             "Notes",
+            "--semantic",
             "--database",
             database,
         ],

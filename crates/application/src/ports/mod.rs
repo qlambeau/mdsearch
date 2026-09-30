@@ -17,7 +17,7 @@ pub use clock::Clock;
 pub use collection_source_store::fake as collection_source_store_fake;
 pub use collection_source_store::{CollectionSourceStore, CollectionSourceSummary};
 pub use collection_store::CollectionStore;
-pub use embedding_generator::EmbeddingGenerator;
+pub use embedding_generator::{EmbeddingGenerator, ModelAvailability};
 pub use file_retrieval_store::{FileRetrievalStore, RetrievedFile};
 pub use file_store::{FileRecord, FileStore, ReconcileOutcome, StoredFile};
 pub use file_system::FileSystem;
@@ -28,4 +28,7 @@ pub use lexical_search_store::{
     LexicalSearchStore, Position, SearchResult, SearchResultSet, SearchScope,
 };
 pub use reranker::Reranker;
-pub use semantic_index_store::{EmbedTarget, SemanticIndexStore};
+pub use semantic_index_store::{
+    CollectionIndexUpdate, EmbedTarget, PreparedSemanticCollection, PreparedSemanticPassage,
+    SemanticIndexStore,
+};

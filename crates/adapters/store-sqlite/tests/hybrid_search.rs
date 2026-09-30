@@ -55,6 +55,7 @@ fn build(
 fn embed(directory: &Path, collection: &CollectionName) -> Result<(), Box<dyn Error>> {
     let mut store =
         SqliteSemanticIndexStore::open_for_embedding(&directory.join("collections.db"))?;
+    store.set_semantic_enabled(collection, true)?;
     store.set_global_model(&model("all-MiniLM-L6-v2")?)?;
     let passages = store.passages(collection)?;
     let pairs = passages

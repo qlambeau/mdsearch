@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
 use fastembed::{RerankInitOptions, RerankerModel as FastembedRerankerModel, TextRerank};
-use kv_application::Reranker;
+use kv_application::{ModelAvailability, Reranker};
 use kv_domain::RerankerModel;
 
 use crate::marker;
@@ -28,6 +28,23 @@ impl FastembedReranker {
 }
 
 impl Reranker for FastembedReranker {
+    fn models(&self) -> Vec<ModelAvailability> {
+        [
+            "bge-reranker-base",
+            "bge-reranker-v2-m3",
+            "jina-reranker-v1-turbo-en",
+            "jina-reranker-v2-base-multilingual",
+        ]
+        .into_iter()
+        .map(|name| {
+            ModelAvailability::new(
+                name.to_owned(),
+                marker::marker_exists(&self.cache_dir, name),
+            )
+        })
+        .collect()
+    }
+
     fn ensure_available(
         &self,
         model: &RerankerModel,

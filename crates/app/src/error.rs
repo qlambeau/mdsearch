@@ -3,7 +3,7 @@ use thiserror::Error;
 use kv_application::{
     AddFilesError, ClockError, CollectionStoreError, CreateCollectionError, DestroyCollectionError,
     EmbedError, FileSystemError, GetFileError, GraphStoreError, HybridError, IndexStatusError,
-    ListCollectionsError, SearchError, UpdateCollectionError,
+    ListCollectionsError, SearchError, SemanticIndexStoreError, UpdateCollectionError,
 };
 use kv_domain::{CollectionNameError, EmbeddingModelError, RerankerModelError};
 
@@ -46,6 +46,9 @@ pub enum AppError {
     /// The embed-collections use case failed.
     #[error(transparent)]
     Embed(#[from] EmbedError),
+    /// The semantic-index store operation failed.
+    #[error(transparent)]
+    SemanticIndexStore(#[from] SemanticIndexStoreError),
     /// The hybrid-search use case failed.
     #[error(transparent)]
     Hybrid(#[from] HybridError),
@@ -55,6 +58,9 @@ pub enum AppError {
     /// The graph context query failed.
     #[error("context query failed: {0}")]
     GraphQuery(String),
+    /// Model validation or provisioning failed before database mutation.
+    #[error("{0}")]
+    Model(String),
     /// The embedding model name is invalid.
     #[error(transparent)]
     InvalidEmbeddingModel(#[from] EmbeddingModelError),

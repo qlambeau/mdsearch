@@ -109,6 +109,15 @@ pub enum UpdateCollectionError {
     /// The file store rejected or failed the reconciliation.
     #[error(transparent)]
     FileStore(#[from] FileStoreError),
+    /// Stored file content could not be retrieved for an unreadable source.
+    #[error(transparent)]
+    RetrievalStore(#[from] FileRetrievalStoreError),
+    /// Semantic inference or atomic index commit failed.
+    #[error(transparent)]
+    SemanticStore(#[from] SemanticIndexStoreError),
+    /// Model validation, availability, or inference failed before commit.
+    #[error(transparent)]
+    Embedding(#[from] EmbeddingError),
 }
 
 /// Describes a failure while reading lexical index state.
@@ -328,4 +337,9 @@ pub enum EmbedError {
     /// The requested collection's lexical index has never been built.
     #[error("lexical index is not built")]
     IndexNotBuilt,
+    /// Semantic indexing must be enabled before using the legacy embed operation.
+    #[error(
+        "semantic indexing is disabled; enable semantic indexing with collection configure --semantic on"
+    )]
+    SemanticDisabled,
 }
