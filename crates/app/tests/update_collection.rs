@@ -246,9 +246,9 @@ fn updates_fails_for_an_unreadable_path() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Covers: FR-012 — `--force` skips unreadable paths.
+/// Covers: REQ-020 FR-009 — `--skip-unreadable` skips unreadable paths.
 #[test]
-fn updates_skips_unreadable_paths_with_force() -> Result<(), Box<dyn Error>> {
+fn updates_skips_unreadable_paths_with_skip_switch() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
     let vault = home.path().join("vault");
     fs::create_dir_all(&vault)?;
@@ -265,7 +265,7 @@ fn updates_skips_unreadable_paths_with_force() -> Result<(), Box<dyn Error>> {
             "Notes",
             path_argument(&missing)?,
             path_argument(&vault)?,
-            "--force",
+            "--skip-unreadable",
         ],
         home.path(),
     )?;

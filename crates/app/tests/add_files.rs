@@ -126,9 +126,9 @@ fn fails_when_a_path_is_unreadable() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Covers: FR-012 — `--force` skips unreadable paths and reports the skip.
+/// Covers: REQ-020 FR-009 — `--skip-unreadable` skips unreadable paths and reports the skip.
 #[test]
-fn skips_unreadable_paths_with_force() -> Result<(), Box<dyn Error>> {
+fn skips_unreadable_paths_with_skip_switch() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
     let file = home.path().join("notes.md");
     fs::write(&file, "content")?;
@@ -144,7 +144,7 @@ fn skips_unreadable_paths_with_force() -> Result<(), Box<dyn Error>> {
             "Notes",
             path_argument(&missing)?,
             path_argument(&file)?,
-            "--force",
+            "--skip-unreadable",
         ],
         home.path(),
     )?;

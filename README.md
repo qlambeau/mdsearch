@@ -158,7 +158,12 @@ Ownership is key. See [Borrowing](sub/borrowing.md).
 ### Global options
 
 Every command accepts `-h/--help`. Commands that read or write the database
-accept `--database PATH`; the default is `~/.mdsearch/collections.db`.
+accept the global `--database PATH` option before, between, or after the command
+and its arguments; the default is `~/.mdsearch/collections.db`. Use `-c` as a
+short form of `--collection` and `-n` as a short form of `--limit` where those
+switches apply. Help and version write to stdout and exit 0. Argument errors
+write to stderr and exit 2; operational failures write to stderr and exit 1.
+Commands that need a default path require `HOME`; help and version do not.
 
 ### `collection create NAME`
 
@@ -203,7 +208,7 @@ parsed.
 
 | Option | Description |
 | --- | --- |
-| `--force` | Re-add files even if unchanged. |
+| `--skip-unreadable` | Skip unreadable files and continue, reporting the skipped count. |
 | `--database PATH` | Database file to use. |
 
 ```sh
@@ -222,7 +227,7 @@ build the semantic index (see [`embed`](#embed)).
 | Option | Description |
 | --- | --- |
 | `--all` | Update every collection in the database. |
-| `--force` | Treat all stored files as modified. |
+| `--skip-unreadable` | Skip unreadable files and continue, reporting the skipped count. |
 | `--database PATH` | Database file to use. |
 
 `NAME` and `PATH...` are mutually exclusive with `--all`.
@@ -251,8 +256,8 @@ Lexical (BM25) ranked passage search across one collection or all collections.
 
 | Option | Description |
 | --- | --- |
-| `--collection NAME` | Restrict to one collection (default: all). |
-| `--limit N` | Maximum results (1–100, default 10). |
+| `-c, --collection NAME` | Restrict to one collection (default: all). |
+| `-n, --limit N` | Maximum results (1–100, default 10). |
 | `--json` | Machine-readable JSON output. |
 | `--related` | Add file-to-file related links per result (see [Entity graph](#entity-graph)). |
 | `--database PATH` | Database file to use. |
@@ -286,7 +291,7 @@ selecting the embedding model and re-ranker.
 
 | Option | Description |
 | --- | --- |
-| `--collection NAME` | Restrict to one collection (default: all). |
+| `-c, --collection NAME` | Restrict to one collection (default: all). |
 | `--model NAME` | Embedding model (default `all-MiniLM-L6-v2`). |
 | `--reranker NAME` | Cross-encoder re-ranker model. |
 | `--download` | Fetch model assets (required the first time). |
@@ -319,8 +324,8 @@ list, optionally re-ranking with a cross-encoder.
 
 | Option | Description |
 | --- | --- |
-| `--collection NAME` | Restrict to one collection (default: all). |
-| `--limit N` | Maximum results (1–100, default 10). |
+| `-c, --collection NAME` | Restrict to one collection (default: all). |
+| `-n, --limit N` | Maximum results (1–100, default 10). |
 | `--json` | Machine-readable JSON output. |
 | `--related` | Add file-to-file related links per result. |
 | `--no-rerank` | Skip cross-encoder re-ranking. |
@@ -342,7 +347,7 @@ and traversal depths (read-only).
 
 | Option | Description |
 | --- | --- |
-| `--collection NAME` | Restrict to one collection (default: search all). |
+| `-c, --collection NAME` | Restrict to one collection (default: search all). |
 | `--database PATH` | Database file to use. |
 
 ```sh
@@ -358,7 +363,7 @@ result. The query is passed as a single positional argument. Read-only.
 
 | Option | Description |
 | --- | --- |
-| `--collection NAME` | **Required.** The collection the query runs against. |
+| `-c, --collection NAME` | **Required.** The collection the query runs against. |
 | `--database PATH` | Database file to use. |
 
 ```sh

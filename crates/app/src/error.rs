@@ -10,6 +10,9 @@ use kv_domain::{CollectionNameError, EmbeddingModelError, RerankerModelError};
 /// Describes a user-visible failure from the `mdsearch` CLI.
 #[derive(Debug, Error)]
 pub enum AppError {
+    /// The command needs a default path but the home directory is unavailable.
+    #[error("home directory is unavailable")]
+    HomeUnavailable,
     /// Clap rejected the command-line arguments.
     #[error(transparent)]
     Arguments(#[from] clap::Error),

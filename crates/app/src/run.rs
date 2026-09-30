@@ -1,13 +1,13 @@
+use std::env;
 use std::ffi::OsString;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use kv_application::{
-    AddFiles, CreateCollection, DestroyCollection, EmbedCollections, EmbedOutcome, EmbedReport,
-    EmbedScope, GetFile, GraphStore, HybridResult, HybridResultSet, HybridSearch, IndexState,
-    IndexStatus, ListCollections, ReadIndexStatus, SearchLexical, SearchResult, SearchResultSet,
-    SearchScope, SkipReason, UpdateCollection, UpdateOutcome, UpdateTarget,
+    AddFiles, CreateCollection, DestroyCollection, EmbedCollections, EmbedScope, GetFile,
+    GraphStore, HybridResult, HybridSearch, ListCollections, ReadIndexStatus, SearchLexical,
+    SearchResult, SearchScope, UpdateCollection, UpdateOutcome, UpdateTarget,
 };
 use kv_domain::{CollectionName, EmbeddingModel, EntityKind, NodeId, RerankerModel};
 use kv_embed_fastembed::{FastembedGenerator, FastembedReranker};
@@ -26,6 +26,10 @@ use crate::graph_query::{build_schema, handle};
 use crate::model_cache;
 use crate::progress;
 use crate::related::{RelatedFile, related_files};
+use crate::rendering::{
+    render_embed_report, render_human, render_hybrid_human, render_hybrid_json,
+    render_index_status, render_json,
+};
 
 /// Executes one `mdsearch` CLI invocation with an injected home directory.
 ///
@@ -33,33 +37,85 @@ use crate::related::{RelatedFile, related_files};
 ///
 /// Returns an argument, name-validation, database, or application error when
 /// the invocation cannot complete.
+///
+/// # Examples
+///
+/// ```no_run
+/// let output = kv_app::run(["mdsearch", "--version"], std::path::Path::new("."))?;
+/// # Ok::<(), kv_app::AppError>(())
+/// ```
 pub fn run<I, T>(args: I, home_directory: &Path) -> Result<String, AppError>
 where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
 {
     let cli = Cli::try_parse_from(args)?;
+    let model_cache_environment = model_cache::ModelCacheEnvironment::from_process();
+    run_cli(cli, Some(home_directory), &model_cache_environment)
+}
+
+/// Executes a CLI invocation using paths from the process environment.
+///
+/// # Errors
+///
+/// Returns an argument or operational error when the command cannot complete.
+///
+/// # Examples
+///
+/// ```no_run
+/// let output = kv_app::run_from_environment(std::env::args_os())?;
+/// # Ok::<(), kv_app::AppError>(())
+/// ```
+pub fn run_from_environment<I, T>(args: I) -> Result<String, AppError>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<OsString> + Clone,
+{
+    let cli = Cli::try_parse_from(args)?;
+    let uses_default_database = cli.database.is_none();
+    let model_cache_environment = model_cache::ModelCacheEnvironment::from_process();
+    let uses_default_model_cache = matches!(&cli.command, Command::Embed(_) | Command::Hybrid(_))
+        && model_cache_environment.needs_home();
+    let home_directory = if uses_default_database || uses_default_model_cache {
+        Some(
+            env::var_os("HOME")
+                .map(PathBuf::from)
+                .ok_or(AppError::HomeUnavailable)?,
+        )
+    } else {
+        None
+    };
+
+    run_cli(cli, home_directory.as_deref(), &model_cache_environment)
+}
+
+fn run_cli(
+    cli: Cli,
+    home_directory: Option<&Path>,
+    model_cache_environment: &model_cache::ModelCacheEnvironment,
+) -> Result<String, AppError> {
+    let database = cli.database;
 
     match cli.command {
         Command::Collection(CollectionCommand::Create(arguments)) => {
-            create_collection(&arguments.name, arguments.database, home_directory)
+            create_collection(&arguments.name, database, home_directory)
         }
-        Command::Collection(CollectionCommand::List(arguments)) => {
-            list_collections(arguments.database, home_directory)
+        Command::Collection(CollectionCommand::List(_)) => {
+            list_collections(database, home_directory)
         }
         Command::Collection(CollectionCommand::Destroy(arguments)) => {
-            destroy_collection(&arguments.name, arguments.database, home_directory)
+            destroy_collection(&arguments.name, database, home_directory)
         }
         Command::Collection(CollectionCommand::Add(arguments)) => add_files(
             &arguments.name,
             &arguments.paths,
-            arguments.database,
-            arguments.force,
+            database.clone(),
+            arguments.skip_unreadable,
             home_directory,
         ),
         Command::Collection(CollectionCommand::Update(arguments)) => {
             if arguments.all {
-                update_all_collections(arguments.database, arguments.force, home_directory)
+                update_all_collections(database.clone(), arguments.skip_unreadable, home_directory)
             } else {
                 let name = arguments.name.as_deref().ok_or_else(|| {
                     AppError::Arguments(clap::Error::new(
@@ -69,20 +125,18 @@ where
                 update_collection(
                     name,
                     &arguments.paths,
-                    arguments.database,
-                    arguments.force,
+                    database.clone(),
+                    arguments.skip_unreadable,
                     home_directory,
                 )
             }
         }
-        Command::Index(IndexCommand::Status(arguments)) => {
-            index_status(arguments.database, home_directory)
-        }
-        Command::Search(arguments) => search(&arguments, home_directory),
+        Command::Index(IndexCommand::Status(_)) => index_status(database, home_directory),
+        Command::Search(arguments) => search(&arguments, database, home_directory),
         Command::Get(arguments) => get_file(
             &arguments.collection,
             &arguments.name_or_id,
-            arguments.database,
+            database,
             home_directory,
         ),
         Command::Embed(arguments) => embed(
@@ -90,20 +144,26 @@ where
             arguments.model.as_deref(),
             arguments.reranker.as_deref(),
             arguments.download,
-            arguments.database,
+            database.clone(),
             home_directory,
+            model_cache_environment,
         ),
-        Command::Hybrid(arguments) => hybrid(&arguments, home_directory),
+        Command::Hybrid(arguments) => hybrid(
+            &arguments,
+            database.clone(),
+            home_directory,
+            model_cache_environment,
+        ),
         Command::Graph(GraphCommand::Neighbors(arguments)) => graph_neighbors(
             &arguments.node,
             arguments.collection.as_deref(),
-            arguments.database,
+            database.clone(),
             home_directory,
         ),
         Command::Context(arguments) => context(
             &arguments.query,
             &arguments.collection,
-            arguments.database,
+            database,
             home_directory,
         ),
     }
@@ -112,11 +172,10 @@ where
 fn create_collection(
     raw_name: &str,
     database_override: Option<std::path::PathBuf>,
-    home_directory: &Path,
+    home_directory: Option<&Path>,
 ) -> Result<String, AppError> {
     let name = CollectionName::try_from(raw_name)?;
-    let database_path = database_override
-        .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
+    let database_path = database_path(database_override, home_directory)?;
     let store = SqliteCollectionStore::open(&database_path)?;
     let mut use_case = CreateCollection::new(store, SystemClock);
     let created_name = use_case.execute(name)?;
@@ -129,10 +188,9 @@ fn create_collection(
 
 fn list_collections(
     database_override: Option<std::path::PathBuf>,
-    home_directory: &Path,
+    home_directory: Option<&Path>,
 ) -> Result<String, AppError> {
-    let database_path = database_override
-        .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
+    let database_path = database_path(database_override, home_directory)?;
     let store = SqliteCollectionStore::open_existing(&database_path)?;
     let use_case = ListCollections::new(store);
     let collections = use_case.execute()?;
@@ -147,11 +205,10 @@ fn list_collections(
 fn destroy_collection(
     raw_name: &str,
     database_override: Option<std::path::PathBuf>,
-    home_directory: &Path,
+    home_directory: Option<&Path>,
 ) -> Result<String, AppError> {
     let name = CollectionName::try_from(raw_name)?;
-    let database_path = database_override
-        .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
+    let database_path = database_path(database_override, home_directory)?;
     let store = SqliteCollectionStore::open_existing(&database_path)?;
     let mut use_case = DestroyCollection::new(store);
     let destroyed_name = use_case.execute(&name)?;
@@ -167,11 +224,10 @@ fn add_files(
     paths: &[PathBuf],
     database_override: Option<PathBuf>,
     force: bool,
-    home_directory: &Path,
+    home_directory: Option<&Path>,
 ) -> Result<String, AppError> {
     let name = CollectionName::try_from(raw_name)?;
-    let database_path = database_override
-        .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
+    let database_path = database_path(database_override, home_directory)?;
     let store = SqliteFileStore::open_for_ingestion(&database_path)?;
     let mut use_case = AddFiles::new(SystemFileSystem, store, SystemClock);
     let outcome = use_case.execute(&name, paths, force)?;
@@ -200,11 +256,10 @@ fn update_collection(
     paths: &[PathBuf],
     database_override: Option<PathBuf>,
     force: bool,
-    home_directory: &Path,
+    home_directory: Option<&Path>,
 ) -> Result<String, AppError> {
     let name = CollectionName::try_from(raw_name)?;
-    let database_path = database_override
-        .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
+    let database_path = database_path(database_override, home_directory)?;
     let store = SqliteFileStore::open_for_ingestion(&database_path)?;
     let mut use_case = UpdateCollection::new(SystemFileSystem, store, SystemClock);
     let outcome = use_case.execute(&name, UpdateTarget::Paths(paths), force)?;
@@ -215,10 +270,9 @@ fn update_collection(
 fn update_all_collections(
     database_override: Option<PathBuf>,
     force: bool,
-    home_directory: &Path,
+    home_directory: Option<&Path>,
 ) -> Result<String, AppError> {
-    let database_path = database_override
-        .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
+    let database_path = database_path(database_override, home_directory)?;
     let collection_store = SqliteCollectionStore::open_existing(&database_path)?;
     let names = ListCollections::new(collection_store).execute()?;
 
@@ -236,10 +290,9 @@ fn update_all_collections(
 
 fn index_status(
     database_override: Option<PathBuf>,
-    home_directory: &Path,
+    home_directory: Option<&Path>,
 ) -> Result<String, AppError> {
-    let database_path = database_override
-        .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
+    let database_path = database_path(database_override, home_directory)?;
     let store = SqliteLexicalIndexStore::open(&database_path)?;
     let use_case = ReadIndexStatus::new(store);
     let statuses = use_case.execute()?;
@@ -251,15 +304,16 @@ fn index_status(
         .join("\n"))
 }
 
-fn search(args: &SearchArgs, home_directory: &Path) -> Result<String, AppError> {
+fn search(
+    args: &SearchArgs,
+    database_override: Option<PathBuf>,
+    home_directory: Option<&Path>,
+) -> Result<String, AppError> {
     if args.query.trim().is_empty() {
         return Err(AppError::Search(kv_application::SearchError::EmptyQuery));
     }
 
-    let database_path = args
-        .database
-        .clone()
-        .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
+    let database_path = database_path(database_override, home_directory)?;
     let store = SqliteLexicalSearchStore::open(&database_path)?;
     let use_case = SearchLexical::new(store);
 
@@ -300,16 +354,19 @@ fn search(args: &SearchArgs, home_directory: &Path) -> Result<String, AppError> 
     }
 }
 
-fn hybrid(args: &HybridArgs, home_directory: &Path) -> Result<String, AppError> {
+fn hybrid(
+    args: &HybridArgs,
+    database_override: Option<PathBuf>,
+    home_directory: Option<&Path>,
+    model_cache_environment: &model_cache::ModelCacheEnvironment,
+) -> Result<String, AppError> {
     if args.query.trim().is_empty() {
         return Err(AppError::Hybrid(kv_application::HybridError::EmptyQuery));
     }
 
-    let database_path = args
-        .database
-        .clone()
-        .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
-    let cache_dir = model_cache::model_cache_dir(home_directory);
+    let database_path = database_path(database_override, home_directory)?;
+    let cache_dir = model_cache::model_cache_dir(home_directory, model_cache_environment)
+        .ok_or(AppError::HomeUnavailable)?;
     let generator = FastembedGenerator::new(cache_dir.clone());
     let reranker = FastembedReranker::new(cache_dir);
     let store = SqliteHybridSearchStore::open(&database_path)?;
@@ -358,11 +415,10 @@ fn get_file(
     raw_collection: &str,
     name_or_id: &str,
     database_override: Option<PathBuf>,
-    home_directory: &Path,
+    home_directory: Option<&Path>,
 ) -> Result<String, AppError> {
     let collection = CollectionName::try_from(raw_collection)?;
-    let database_path = database_override
-        .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
+    let database_path = database_path(database_override, home_directory)?;
     let store = SqliteFileRetrievalStore::open(&database_path)?;
     let use_case = GetFile::new(store);
     let file = use_case.execute(&collection, name_or_id)?;
@@ -374,10 +430,9 @@ fn graph_neighbors(
     raw_node: &str,
     collection_name: Option<&str>,
     database_override: Option<PathBuf>,
-    home_directory: &Path,
+    home_directory: Option<&Path>,
 ) -> Result<String, AppError> {
-    let database_path = database_override
-        .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
+    let database_path = database_path(database_override, home_directory)?;
     let store = SqliteGraphStore::open(&database_path)?;
 
     let collections: Vec<CollectionName> = if let Some(name) = collection_name {
@@ -422,11 +477,10 @@ fn context(
     query: &str,
     collection_name: &str,
     database_override: Option<PathBuf>,
-    home_directory: &Path,
+    home_directory: Option<&Path>,
 ) -> Result<String, AppError> {
     let _collection = CollectionName::try_from(collection_name)?;
-    let database_path = database_override
-        .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
+    let database_path = database_path(database_override, home_directory)?;
     let store = SqliteGraphStore::open(&database_path)?;
     let schema = build_schema(handle(store));
 
@@ -444,57 +498,6 @@ fn context(
     }
 
     serde_json::to_string(&response.data).map_err(|error| AppError::GraphQuery(error.to_string()))
-}
-
-fn render_human(set: &SearchResultSet, related: Option<&[Vec<RelatedFile>]>) -> String {
-    let mut lines = Vec::new();
-    for (index, result) in set.results().iter().enumerate() {
-        let position = result.position();
-        let header = if position.line_start() == 0 {
-            format!(
-                "{}. {} ({}, score {:.3})",
-                index + 1,
-                result.path().display(),
-                result.kind().as_str(),
-                result.score()
-            )
-        } else {
-            format!(
-                "{}. {}:{}-{} ({}, score {:.3})",
-                index + 1,
-                result.path().display(),
-                position.line_start(),
-                position.line_end(),
-                result.kind().as_str(),
-                result.score()
-            )
-        };
-        lines.push(header);
-        lines.push(result.text().to_owned());
-        render_related_lines(&mut lines, related, index);
-    }
-    if !set.results().is_empty() {
-        lines.push(format!("{} match(es)", set.total()));
-    }
-    lines.join("\n")
-}
-
-/// Appends the `related: <path> (<RELATION>)` lines for the result at `index`.
-fn render_related_lines(
-    lines: &mut Vec<String>,
-    related: Option<&[Vec<RelatedFile>]>,
-    index: usize,
-) {
-    let Some(related) = related else {
-        return;
-    };
-    for file in related.get(index).into_iter().flatten() {
-        lines.push(format!(
-            "related: {} ({})",
-            file.path().display(),
-            file.relation().as_str()
-        ));
-    }
 }
 
 /// A ranked result that exposes the file whose related context is recovered.
@@ -536,164 +539,18 @@ where
         .collect()
 }
 
-fn render_json(
-    set: &SearchResultSet,
-    query: &str,
-    scope: &str,
-    limit: u16,
-    related: Option<&[Vec<RelatedFile>]>,
-) -> String {
-    let results: Vec<serde_json::Value> = set
-        .results()
-        .iter()
-        .enumerate()
-        .map(|(index, result)| {
-            let position = result.position();
-            let mut value = serde_json::json!({
-                "collection": result.collection().display_name(),
-                "path": result.path().to_string_lossy(),
-                "kind": result.kind().as_str(),
-                "text": result.text(),
-                "score": result.score(),
-                "position": {
-                    "byte_offset": position.byte_offset(),
-                    "byte_length": position.byte_length(),
-                    "line_start": position.line_start(),
-                    "line_end": position.line_end(),
-                },
-            });
-            append_related_field(&mut value, related, index);
-            value
-        })
-        .collect();
-
-    serde_json::json!({
-        "query": query,
-        "scope": scope,
-        "limit": limit,
-        "total": set.total(),
-        "results": results,
-    })
-    .to_string()
-}
-
-/// Adds the `related` field to a result JSON object when context is present.
-fn append_related_field(
-    value: &mut serde_json::Value,
-    related: Option<&[Vec<RelatedFile>]>,
-    index: usize,
-) {
-    let Some(related) = related else {
-        return;
-    };
-    let entries: Vec<serde_json::Value> = related
-        .get(index)
-        .into_iter()
-        .flatten()
-        .map(|file| {
-            serde_json::json!({
-                "path": file.path().to_string_lossy(),
-                "relation": file.relation().as_str(),
-            })
-        })
-        .collect();
-    value["related"] = serde_json::json!(entries);
-}
-
-fn render_hybrid_human(set: &HybridResultSet, related: Option<&[Vec<RelatedFile>]>) -> String {
-    let mut lines = Vec::new();
-    for (index, result) in set.results().iter().enumerate() {
-        let position = result.position();
-        let header = if position.line_start() == 0 {
-            format!(
-                "{}. {} ({}, score {:.3})",
-                index + 1,
-                result.path().display(),
-                result.kind().as_str(),
-                result.ordering_score()
-            )
-        } else {
-            format!(
-                "{}. {}:{}-{} ({}, score {:.3})",
-                index + 1,
-                result.path().display(),
-                position.line_start(),
-                position.line_end(),
-                result.kind().as_str(),
-                result.ordering_score()
-            )
-        };
-        lines.push(header);
-        lines.push(result.text().to_owned());
-        render_related_lines(&mut lines, related, index);
-    }
-    if !set.results().is_empty() {
-        lines.push(format!("{} result(s)", set.results().len()));
-    }
-    if set.rerank_warning() {
-        lines.push("re-ranking skipped: re-ranker model is not cached; pass --no-rerank to suppress this warning".to_owned());
-    }
-    lines.join("\n")
-}
-
-fn render_hybrid_json(
-    set: &HybridResultSet,
-    query: &str,
-    scope: &str,
-    limit: u16,
-    related: Option<&[Vec<RelatedFile>]>,
-) -> String {
-    let results: Vec<serde_json::Value> = set
-        .results()
-        .iter()
-        .enumerate()
-        .map(|(index, result)| {
-            let position = result.position();
-            let mut value = serde_json::json!({
-                "collection": result.collection().display_name(),
-                "path": result.path().to_string_lossy(),
-                "kind": result.kind().as_str(),
-                "text": result.text(),
-                "reranker_score": result.rerank_score(),
-                "fused_score": result.fused_score(),
-                "bm25_score": result.lexical_score(),
-                "cosine_similarity": result.semantic_score(),
-                "ordering_score": result.ordering_score(),
-                "position": {
-                    "byte_offset": position.byte_offset(),
-                    "byte_length": position.byte_length(),
-                    "line_start": position.line_start(),
-                    "line_end": position.line_end(),
-                },
-            });
-            append_related_field(&mut value, related, index);
-            value
-        })
-        .collect();
-
-    serde_json::json!({
-        "query": query,
-        "scope": scope,
-        "limit": limit,
-        "reranked": set.reranked(),
-        "rerank_warning": set.rerank_warning(),
-        "total": results.len(),
-        "results": results,
-    })
-    .to_string()
-}
-
 fn embed(
     collection_name: Option<&str>,
     model_name: Option<&str>,
     reranker_name: Option<&str>,
     download: bool,
     database_override: Option<PathBuf>,
-    home_directory: &Path,
+    home_directory: Option<&Path>,
+    model_cache_environment: &model_cache::ModelCacheEnvironment,
 ) -> Result<String, AppError> {
-    let database_path = database_override
-        .unwrap_or_else(|| home_directory.join(".mdsearch").join("collections.db"));
-    let cache_dir = model_cache::model_cache_dir(home_directory);
+    let database_path = database_path(database_override, home_directory)?;
+    let cache_dir = model_cache::model_cache_dir(home_directory, model_cache_environment)
+        .ok_or(AppError::HomeUnavailable)?;
     let generator = FastembedGenerator::new(cache_dir.clone());
     let reranker = FastembedReranker::new(cache_dir);
     let store = SqliteSemanticIndexStore::open_for_embedding(&database_path)?;
@@ -727,67 +584,6 @@ fn embed(
     }
 }
 
-fn render_embed_report(report: &EmbedReport) -> String {
-    let mut lines = report
-        .outcomes()
-        .iter()
-        .map(render_embed_outcome)
-        .collect::<Vec<_>>();
-    if report.any_failed() {
-        lines.push("embedding completed with failures".to_owned());
-    }
-    lines.join("\n")
-}
-
-fn render_embed_outcome(outcome: &EmbedOutcome) -> String {
-    let name = outcome.collection().display_name();
-    match outcome {
-        EmbedOutcome::Embedded { passage_count, .. } => {
-            format!("collection \"{name}\": embedded {passage_count} passage(s)")
-        }
-        EmbedOutcome::AlreadyCurrent { .. } => {
-            format!("collection \"{name}\": already current")
-        }
-        EmbedOutcome::Skipped {
-            reason: SkipReason::NoFiles,
-            ..
-        } => format!("collection \"{name}\": skipped (no files)"),
-        EmbedOutcome::Skipped {
-            reason: SkipReason::LexicalNotBuilt,
-            ..
-        } => format!("collection \"{name}\": skipped (lexical index not built)"),
-        EmbedOutcome::Failed { message, .. } => {
-            format!("collection \"{name}\": failed ({message})")
-        }
-    }
-}
-
-fn render_index_status(status: &IndexStatus) -> String {
-    let semantic = status
-        .semantic()
-        .map(|line| {
-            format!(
-                ", embedded with {} ({} dimensions)",
-                line.model().as_str(),
-                line.dimension()
-            )
-        })
-        .unwrap_or_default();
-    match (status.state(), status.built_at()) {
-        (IndexState::Built, Some(timestamp)) => format!(
-            "collection \"{}\": lexical index built, {} file(s), {} passage(s), built at {}{semantic}",
-            status.collection().display_name(),
-            status.file_count(),
-            status.passage_count(),
-            timestamp.as_unix_seconds()
-        ),
-        _ => format!(
-            "collection \"{}\": lexical index not built",
-            status.collection().display_name()
-        ),
-    }
-}
-
 fn format_update(display_name: &str, outcome: &UpdateOutcome) -> String {
     let mut line = format!(
         "updated collection \"{display_name}\": added {}, modified {}, deleted {}",
@@ -810,6 +606,18 @@ fn format_update(display_name: &str, outcome: &UpdateOutcome) -> String {
     line
 }
 
+fn database_path(
+    database_override: Option<PathBuf>,
+    home_directory: Option<&Path>,
+) -> Result<PathBuf, AppError> {
+    if let Some(database_path) = database_override {
+        return Ok(database_path);
+    }
+
+    let home_directory = home_directory.ok_or(AppError::HomeUnavailable)?;
+    Ok(home_directory.join(".mdsearch").join("collections.db"))
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -821,7 +629,7 @@ mod tests {
 
     use crate::related::RelatedFile;
 
-    use super::{
+    use crate::rendering::{
         render_embed_outcome, render_embed_report, render_human, render_json, render_related_lines,
     };
 

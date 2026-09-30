@@ -9,9 +9,10 @@ mod graph_query;
 mod model_cache;
 mod progress;
 mod related;
+mod rendering;
 mod run;
 
 pub use error::AppError;
 pub use graph_query::{GraphQueryRoot, build_schema, handle};
 pub use related::{RelatedFile, related_files};
-pub use run::run;
+pub use run::{run, run_from_environment};
