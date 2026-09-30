@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
 use fastembed::{EmbeddingModel as FastembedModel, TextEmbedding, TextInitOptions};
-use kv_application::EmbeddingGenerator;
+use kv_application::{EmbeddingGenerator, ModelAvailability};
 use kv_domain::{Embedding, EmbeddingModel};
 
 use crate::marker;
@@ -28,6 +28,26 @@ impl FastembedGenerator {
 }
 
 impl EmbeddingGenerator for FastembedGenerator {
+    fn models(&self) -> Vec<ModelAvailability> {
+        [
+            "all-MiniLM-L6-v2",
+            "bge-small-en-v1.5",
+            "bge-base-en-v1.5",
+            "bge-large-en-v1.5",
+            "multilingual-e5-small",
+            "multilingual-e5-base",
+            "multilingual-e5-large",
+        ]
+        .into_iter()
+        .map(|name| {
+            ModelAvailability::new(
+                name.to_owned(),
+                marker::marker_exists(&self.cache_dir, name),
+            )
+        })
+        .collect()
+    }
+
     fn ensure_available(
         &self,
         model: &EmbeddingModel,

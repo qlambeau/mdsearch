@@ -12,6 +12,8 @@ pub enum UpdateTarget<'a> {
     Paths(&'a [PathBuf]),
     /// Re-read every stored file to detect modifications.
     Stored,
+    /// Reconcile the complete discovered file set from registered sources.
+    RegisteredFiles(&'a [PathBuf]),
 }
 
 /// The outcome of an update-collection operation.
@@ -116,10 +118,13 @@ where
             .map(|file| (file.path(), file.content_hash()))
             .collect::<HashMap<_, _>>();
 
-        let (on_disk, walk_skipped) = self.collect_on_disk(target, force)?;
+        let (on_disk, walk_skipped, discovered_paths) = self.collect_on_disk(target, force)?;
         let (mut to_upsert, added, on_disk_modified) = classify_on_disk(&on_disk, &stored_by_path);
 
-        let on_disk_paths = on_disk.iter().map(FileRecord::path).collect::<HashSet<_>>();
+        let on_disk_paths = discovered_paths
+            .iter()
+            .map(PathBuf::as_path)
+            .collect::<HashSet<_>>();
         let stored_changes = self.classify_stored(&stored, &on_disk_paths, target, force)?;
         to_upsert.extend(stored_changes.upsert);
 
@@ -141,9 +146,25 @@ where
         &self,
         target: UpdateTarget<'_>,
         force: bool,
-    ) -> Result<(Vec<FileRecord>, usize), UpdateCollectionError> {
+    ) -> Result<(Vec<FileRecord>, usize, Vec<PathBuf>), UpdateCollectionError> {
+        if let UpdateTarget::RegisteredFiles(paths) = target {
+            let mut records = Vec::new();
+            let mut skipped = 0;
+            let mut unique = HashSet::new();
+            for path in paths {
+                if !unique.insert(path.clone()) {
+                    continue;
+                }
+                match self.filesystem.read(path) {
+                    Ok(content) => records.push(FileRecord::new(path.clone(), content)),
+                    Err(_) if force => skipped += 1,
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            return Ok((records, skipped, unique.into_iter().collect()));
+        }
         let UpdateTarget::Paths(paths) = target else {
-            return Ok((Vec::new(), 0));
+            return Ok((Vec::new(), 0, Vec::new()));
         };
 
         let mut discovered = Vec::new();
@@ -158,15 +179,17 @@ where
         }
 
         let mut on_disk = Vec::new();
-        for path in discovered {
-            match self.filesystem.read(&path) {
-                Ok(content) => on_disk.push(FileRecord::new(path, content)),
+        let mut unique_files = HashSet::new();
+        discovered.retain(|path| unique_files.insert(path.clone()));
+        for path in &discovered {
+            match self.filesystem.read(path) {
+                Ok(content) => on_disk.push(FileRecord::new(path.clone(), content)),
                 Err(_) if force => skipped += 1,
                 Err(error) => return Err(error.into()),
             }
         }
 
-        Ok((on_disk, skipped))
+        Ok((on_disk, skipped, discovered))
     }
 
     fn classify_stored(
@@ -193,7 +216,10 @@ where
                     delete.push(file.path().to_owned());
                 }
                 Ok(true) => {
-                    if matches!(target, UpdateTarget::Stored) {
+                    if matches!(target, UpdateTarget::RegisteredFiles(_)) {
+                        deleted += 1;
+                        delete.push(file.path().to_owned());
+                    } else if matches!(target, UpdateTarget::Stored) {
                         match self.filesystem.read(file.path()) {
                             Ok(content) => {
                                 let hash = ContentHash::from_content(&content);

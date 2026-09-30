@@ -6,14 +6,24 @@ use std::process::Command;
 use rstest::rstest;
 use tempfile::tempdir;
 
-use kv_app::run;
+mod common;
+use common::run;
 
 /// Covers: FR-001, FR-002, FR-007, and FR-008 — create the first collection.
 #[test]
 fn creates_a_collection_at_the_default_database_path() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
 
-    let output = run(["mdsearch", "collection", "create", "Notes"], home.path())?;
+    let output = run(
+        [
+            "mdsearch",
+            "collection",
+            "create",
+            "Notes",
+            home.path().to_str().ok_or("UTF-8 fixture path required")?,
+        ],
+        home.path(),
+    )?;
 
     assert!(output.contains("Notes"));
     assert!(home.path().join(".mdsearch/collections.db").exists());
@@ -36,6 +46,7 @@ fn creates_a_collection_at_the_explicit_database_path() -> Result<(), Box<dyn Er
             "collection",
             "create",
             "Project Notes",
+            home.path().to_str().ok_or("UTF-8 fixture path required")?,
             "--database",
             database_argument,
         ],
@@ -54,11 +65,29 @@ fn creates_a_collection_at_the_explicit_database_path() -> Result<(), Box<dyn Er
 fn rejects_a_case_insensitive_duplicate_across_cli_runs() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
 
-    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "create",
+            "Notes",
+            home.path().to_str().ok_or("UTF-8 fixture path required")?,
+        ],
+        home.path(),
+    )?;
 
-    let error = run(["mdsearch", "collection", "create", "notes"], home.path())
-        .err()
-        .ok_or_else(|| std::io::Error::other("the duplicate collection command should fail"))?;
+    let error = run(
+        [
+            "mdsearch",
+            "collection",
+            "create",
+            "notes",
+            home.path().to_str().ok_or("UTF-8 fixture path required")?,
+        ],
+        home.path(),
+    )
+    .err()
+    .ok_or_else(|| std::io::Error::other("the duplicate collection command should fail"))?;
 
     assert!(error.to_string().contains("already in use"));
 
@@ -75,9 +104,18 @@ fn rejects_a_case_insensitive_duplicate_across_cli_runs() -> Result<(), Box<dyn 
 fn rejects_invalid_collection_names(#[case] name: &str) -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
 
-    let error = run(["mdsearch", "collection", "create", name], home.path())
-        .err()
-        .ok_or_else(|| std::io::Error::other("an invalid collection name should fail"))?;
+    let error = run(
+        [
+            "mdsearch",
+            "collection",
+            "create",
+            name,
+            home.path().to_str().ok_or("UTF-8 fixture path required")?,
+        ],
+        home.path(),
+    )
+    .err()
+    .ok_or_else(|| std::io::Error::other("an invalid collection name should fail"))?;
 
     assert!(error.to_string().contains("collection name"));
     assert!(!home.path().join(".mdsearch/collections.db").exists());
@@ -102,6 +140,7 @@ fn reports_an_inaccessible_database_without_partial_collection() -> Result<(), B
             "collection",
             "create",
             "Notes",
+            home.path().to_str().ok_or("UTF-8 fixture path required")?,
             "--database",
             database_argument,
         ],
@@ -121,7 +160,7 @@ fn reports_an_inaccessible_database_without_partial_collection() -> Result<(), B
 fn binary_reports_success_for_collection_creation() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
     let output = Command::new(env!("CARGO_BIN_EXE_mdsearch"))
-        .args(["collection", "create", "Notes"])
+        .args(["collection", "create", "Notes", "."])
         .env("HOME", home.path())
         .output()?;
 
@@ -136,7 +175,7 @@ fn binary_reports_success_for_collection_creation() -> Result<(), Box<dyn Error>
 fn binary_reports_invalid_name_failure() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
     let output = Command::new(env!("CARGO_BIN_EXE_mdsearch"))
-        .args(["collection", "create", "Notes/2026"])
+        .args(["collection", "create", "Notes/2026", "."])
         .env("HOME", home.path())
         .output()?;
 
@@ -150,7 +189,7 @@ fn binary_reports_invalid_name_failure() -> Result<(), Box<dyn Error>> {
 #[test]
 fn binary_reports_missing_home_directory() -> Result<(), Box<dyn Error>> {
     let output = Command::new(env!("CARGO_BIN_EXE_mdsearch"))
-        .args(["collection", "create", "Notes"])
+        .args(["collection", "create", "Notes", "."])
         .env_remove("HOME")
         .output()?;
 

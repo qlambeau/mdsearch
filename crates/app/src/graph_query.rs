@@ -5,11 +5,11 @@
 //! related-concept queries, and so the debug CLI and tests can exercise the
 //! graph through a typed query.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 use async_graphql::{Context, EmptyMutation, EmptySubscription, Object, Schema, SimpleObject};
 use kv_application::{GraphStore, GraphStoreError, Neighbor};
-use kv_domain::{EntityKind, NodeId, RelationKind};
+use kv_domain::{CollectionName, EntityKind, NodeId, RelationKind};
 
 /// A serializable view of a graph node for the query layer.
 #[derive(SimpleObject)]
@@ -29,14 +29,13 @@ struct NeighborOut {
     depth: u8,
 }
 
-/// The concrete store handle injected into the schema.
-type StoreHandle = Arc<Mutex<dyn GraphStore + Send>>;
-
 /// The graph query root exposing `node` and `neighbors`.
-pub struct GraphQueryRoot;
+pub struct GraphQueryRoot<S> {
+    store: Mutex<S>,
+}
 
 #[Object]
-impl GraphQueryRoot {
+impl<S: GraphStore + Send + 'static> GraphQueryRoot<S> {
     /// Returns the node with the given kind and key.
     ///
     /// Errors when the node does not exist in the collection (REQ-013 FR-008).
@@ -44,18 +43,17 @@ impl GraphQueryRoot {
     async fn node(
         &self,
         ctx: &Context<'_>,
-        collection: String,
         kind: String,
         key: String,
     ) -> async_graphql::Result<NodeOut> {
-        let store = ctx.data::<StoreHandle>()?;
-        let collection = parse_collection(&collection)?;
+        let collection = ctx.data::<CollectionName>()?;
         let id = NodeId::new(parse_kind(&kind)?, key);
-        let guard = store
+        let guard = self
+            .store
             .lock()
             .map_err(|_| async_graphql::Error::new("graph store lock poisoned"))?;
         let node = guard
-            .node(&collection, &id)
+            .node(collection, &id)
             .map_err(|error| map_error(&error))?
             .ok_or_else(|| node_not_found(&id))?;
         Ok(node.into())
@@ -70,28 +68,27 @@ impl GraphQueryRoot {
     async fn neighbors(
         &self,
         ctx: &Context<'_>,
-        collection: String,
         kind: String,
         key: String,
         relation: Option<String>,
         max_hops: u8,
     ) -> async_graphql::Result<Vec<NeighborOut>> {
-        let store = ctx.data::<StoreHandle>()?;
-        let collection = parse_collection(&collection)?;
+        let collection = ctx.data::<CollectionName>()?;
         let id = NodeId::new(parse_kind(&kind)?, key);
         let relation = relation.as_deref().map(parse_relation).transpose()?;
-        let guard = store
+        let guard = self
+            .store
             .lock()
             .map_err(|_| async_graphql::Error::new("graph store lock poisoned"))?;
         if guard
-            .node(&collection, &id)
+            .node(collection, &id)
             .map_err(|error| map_error(&error))?
             .is_none()
         {
             return Err(node_not_found(&id));
         }
         let neighbors = guard
-            .neighbors(&collection, &id, relation, max_hops)
+            .neighbors(collection, &id, relation, max_hops)
             .map_err(|error| map_error(&error))?;
         Ok(neighbors.into_iter().map(Into::into).collect())
     }
@@ -129,11 +126,6 @@ impl From<kv_domain::GraphNode> for NodeOut {
     }
 }
 
-fn parse_collection(raw: &str) -> Result<kv_domain::CollectionName, async_graphql::Error> {
-    kv_domain::CollectionName::try_from(raw)
-        .map_err(|error| async_graphql::Error::new(error.to_string()))
-}
-
 fn parse_kind(raw: &str) -> Result<EntityKind, async_graphql::Error> {
     EntityKind::from_key(raw)
         .ok_or_else(|| async_graphql::Error::new(format!("unknown node kind: {raw}")))
@@ -149,17 +141,19 @@ fn map_error(error: &GraphStoreError) -> async_graphql::Error {
 }
 
 /// Builds the in-process graph query schema over the given store handle.
-pub fn build_schema(
-    store: StoreHandle,
-) -> Schema<GraphQueryRoot, EmptyMutation, EmptySubscription> {
-    Schema::build(GraphQueryRoot, EmptyMutation, EmptySubscription)
-        .data(store)
-        .finish()
-}
-
-/// Wraps a [`GraphStore`] so it can be injected into the schema.
-pub fn handle(store: impl GraphStore + Send + 'static) -> StoreHandle {
-    Arc::new(Mutex::new(store))
+pub fn build_schema<S: GraphStore + Send + 'static>(
+    store: S,
+    collection: CollectionName,
+) -> Schema<GraphQueryRoot<S>, EmptyMutation, EmptySubscription> {
+    Schema::build(
+        GraphQueryRoot {
+            store: Mutex::new(store),
+        },
+        EmptyMutation,
+        EmptySubscription,
+    )
+    .data(collection)
+    .finish()
 }
 
 #[cfg(test)]
@@ -173,16 +167,17 @@ mod tests {
     use tempfile::tempdir;
 
     fn graphql_query(
-        store: StoreHandle,
+        store: SqliteGraphStore,
         doc: &str,
     ) -> Result<async_graphql::Response, Box<dyn Error>> {
-        let schema = build_schema(store);
+        let schema = build_schema(store, CollectionName::try_from("Notes")?);
         let runtime = tokio::runtime::Builder::new_current_thread().build()?;
         let response = runtime.block_on(schema.execute(doc));
         Ok(response)
     }
 
-    fn build_store() -> Result<(StoreHandle, CollectionName, std::path::PathBuf), Box<dyn Error>> {
+    fn build_store()
+    -> Result<(SqliteGraphStore, CollectionName, std::path::PathBuf), Box<dyn Error>> {
         let directory = tempdir()?;
         let database_path = directory.path().join("collections.db");
         let collection = CollectionName::try_from("Notes")?;
@@ -208,15 +203,14 @@ mod tests {
         )?;
 
         let graph_store = SqliteGraphStore::open(&database_path)?;
-        Ok((handle(graph_store), collection, a))
+        Ok((graph_store, collection, a))
     }
 
     #[test]
     fn neighbors_query_returns_results() -> Result<(), Box<dyn Error>> {
-        let (store, collection, a) = build_store()?;
+        let (store, _collection, a) = build_store()?;
         let doc = format!(
-            r#"{{ neighbors(collection: "{}", kind: "file", key: "{}", maxHops: 2) {{ key relation depth }} }}"#,
-            collection.display_name(),
+            r#"{{ neighbors(kind: "file", key: "{}", maxHops: 2) {{ key relation depth }} }}"#,
             a.to_string_lossy()
         );
         let response = graphql_query(store, &doc)?;
@@ -227,12 +221,9 @@ mod tests {
     /// Covers: REQ-013 FR-008 — an unknown node query reports an error.
     #[test]
     fn node_query_reports_unknown_node() -> Result<(), Box<dyn Error>> {
-        let (store, collection, _) = build_store()?;
-        let doc = format!(
-            r#"{{ node(collection: "{}", kind: "file", key: "zzz.md") {{ key }} }}"#,
-            collection.display_name()
-        );
-        let response = graphql_query(store, &doc)?;
+        let (store, _collection, _) = build_store()?;
+        let doc = r#"{ node(kind: "file", key: "zzz.md") { key } }"#;
+        let response = graphql_query(store, doc)?;
         assert!(
             !response.errors.is_empty(),
             "expected a node-not-found error"

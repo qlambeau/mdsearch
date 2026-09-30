@@ -2,11 +2,40 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use kv_application::{FileSystem, FileSystemError};
+use kv_domain::{CollectionSource, SourceKind};
 
 /// Reads markdown files from the local filesystem.
 pub struct SystemFileSystem;
 
 impl FileSystem for SystemFileSystem {
+    fn resolve_source(&self, path: &Path) -> Result<CollectionSource, FileSystemError> {
+        let canonical = fs::canonicalize(path).map_err(|source| unreadable(path, source))?;
+        if canonical.to_str().is_none() {
+            return Err(unreadable(
+                path,
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "source path is not valid UTF-8",
+                ),
+            ));
+        }
+        let metadata = fs::metadata(&canonical).map_err(|source| unreadable(&canonical, source))?;
+        let kind = if metadata.is_dir() {
+            SourceKind::Directory
+        } else if metadata.is_file() && is_markdown(&canonical) {
+            SourceKind::File
+        } else {
+            return Err(unreadable(
+                path,
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "source must be a Markdown file or directory",
+                ),
+            ));
+        };
+        Ok(CollectionSource::new(canonical, kind))
+    }
+
     fn expand(&self, path: &Path) -> Result<Vec<PathBuf>, FileSystemError> {
         let metadata = fs::metadata(path).map_err(|source| unreadable(path, source))?;
 

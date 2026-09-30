@@ -109,11 +109,23 @@ pub enum UpdateCollectionError {
     /// The file store rejected or failed the reconciliation.
     #[error(transparent)]
     FileStore(#[from] FileStoreError),
+    /// Stored file content could not be retrieved for an unreadable source.
+    #[error(transparent)]
+    RetrievalStore(#[from] FileRetrievalStoreError),
+    /// Semantic inference or atomic index commit failed.
+    #[error(transparent)]
+    SemanticStore(#[from] SemanticIndexStoreError),
+    /// Model validation, availability, or inference failed before commit.
+    #[error(transparent)]
+    Embedding(#[from] EmbeddingError),
 }
 
 /// Describes a failure while reading lexical index state.
 #[derive(Debug, Error)]
 pub enum IndexStoreError {
+    /// The requested inspection scope does not exist.
+    #[error("collection not found")]
+    CollectionNotFound,
     /// The database operation failed after it was opened.
     #[error("index storage failed")]
     Storage(#[source] Box<dyn Error + Send + Sync>),
@@ -262,7 +274,7 @@ pub enum HybridSearchStoreError {
     #[error("lexical index is not built")]
     IndexNotBuilt,
     /// An in-scope collection's semantic index is stale.
-    #[error("semantic index is stale; run mdsearch embed")]
+    #[error("semantic index is stale")]
     StaleSemanticIndex,
     /// An in-scope collection's recorded dimension disagrees with the active
     /// embedding dimension.
@@ -328,4 +340,9 @@ pub enum EmbedError {
     /// The requested collection's lexical index has never been built.
     #[error("lexical index is not built")]
     IndexNotBuilt,
+    /// Semantic indexing must be enabled before using the legacy embed operation.
+    #[error(
+        "semantic indexing is disabled; enable semantic indexing with collection configure --semantic on"
+    )]
+    SemanticDisabled,
 }

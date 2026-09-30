@@ -30,6 +30,7 @@ required at runtime.
 - [Installation](#installation)
 - [Quick start](#quick-start)
 - [Command reference](#command-reference)
+- [Migration from the previous CLI](#migration-from-the-previous-cli)
 - [Entity graph](#entity-graph)
 - [JSON output](#json-output)
 - [Frontmatter reference](#frontmatter-reference)
@@ -54,9 +55,9 @@ a different database file (for example, per-project vaults).
 
 | Index | Built by | Purpose |
 | --- | --- | --- |
-| **Lexical** (FTS5/BM25) | `collection update` | Ranked passage search over file content and frontmatter. |
-| **Semantic** (vector embeddings) | `embed` | Passage-level semantic search; powers `hybrid`. |
-| **Entity graph** (nodes + edges) | `collection update` | Files, tags, and aliases as nodes with typed relationships; powers `--related`, `graph neighbors`, and `context`. |
+| **Lexical** (FTS5/BM25) | `update` | Ranked passage search over file content and frontmatter. |
+| **Semantic** (vector embeddings) | `update` (when enabled) | Passage-level semantic search; powers `search --mode hybrid`. |
+| **Entity graph** (nodes + edges) | `update` | Files, tags, and aliases as nodes with typed relationships; powers `--related`, `graph neighbors`, and `graph query`. |
 
 ### Frontmatter
 
@@ -66,11 +67,10 @@ Each file's YAML frontmatter block is parsed for `title`, `tags`, `aliases`, and
 
 ### Retrieval surface
 
-- `search` — lexical (BM25) ranked passages.
-- `hybrid` — fused lexical + semantic results, optionally re-ranked.
+- `search` — lexical passages by default; `--mode hybrid` fuses lexical and semantic results.
 - `get` — retrieve a complete stored file by name or indexing-assigned ID.
-- `--related` on `search`/`hybrid` — file-to-file related links per result.
-- `graph neighbors` / `context` — inspect or query the entity graph.
+- `--related` on `search` in either mode — file-to-file related links per result.
+- `graph neighbors` / `graph query` — inspect or query the entity graph.
 
 ---
 
@@ -100,7 +100,7 @@ install -m 0755 target/release/mdsearch ~/.local/bin/mdsearch
 - Rust toolchain (see `rust-toolchain.toml`; the project uses Rust 2024 edition).
 - `sqlite-vector` is statically linked; no system SQLite or vector library is
   needed.
-- Model assets (for `embed`/`hybrid`) are downloaded on demand with
+- Model assets (for semantic updates and hybrid search) are downloaded on demand with
   `--download`; everything else works offline with no downloads.
 
 ### Verify
@@ -114,265 +114,339 @@ mdsearch --help
 
 ## Quick start
 
-Create a vault, add it to a collection, index it, and search:
+Register a vault as a source, index it, and search:
 
 ```sh
-# 1. Create a collection.
-mdsearch collection create Notes
+# 1. Register a collection source (registration does not index files).
+mdsearch collection create Notes ~/vault
 
-# 2. Add a directory of markdown files to it.
-mdsearch collection add Notes ~/vault
+# 2. Build the lexical index and entity graph.
+mdsearch update --collection Notes
 
-# 3. Build the lexical index and entity graph.
-mdsearch collection update Notes ~/vault
-
-# 4. Search lexically.
+# 3. Search lexically.
 mdsearch search rust --collection Notes
 
-# 5. See the related files behind each result.
+# 4. See related files behind each result.
 mdsearch search rust --collection Notes --related
 
-# 6. Check index state.
-mdsearch index status
+# 5. Retrieve a complete file by name or by the file_id shown in results.
+mdsearch get rust.md --collection Notes
+mdsearch get --id 1 --collection Notes
+
+# 6. Inspect stored-content freshness.
+mdsearch status --collection Notes
 ```
 
-Example `search` output:
+Illustrative `search` output (stored paths are canonical absolute paths):
 
 ```text
-1. ~/vault/sub/borrowing.md:3-3 (tags, score 0.272)
+1. /home/me/vault/sub/borrowing.md:3-3 (tags, score 0.272) [Notes, file_id 3]
 rust
-2. ~/vault/rust.md:2-2 (title, score 0.227)
+2. /home/me/vault/rust.md:2-2 (title, score 0.227) [Notes, file_id 1]
 Rust Notes
-3. ~/vault/rust.md:3-3 (tags, score 0.227)
+3. /home/me/vault/rust.md:3-3 (tags, score 0.227) [Notes, file_id 1]
 rust systems
-4. ~/vault/rust.md:6-7 (body, score 0.105)
+4. /home/me/vault/rust.md:6-7 (body, score 0.105) [Notes, file_id 1]
 # Rust
 Ownership is key. See [Borrowing](sub/borrowing.md).
 4 match(es)
 ```
 
+### Enable semantic search
+
+Enable semantic indexing for the collection, then update. The first update can
+fetch the selected embedding model with explicit download permission:
+
+```sh
+mdsearch collection configure Notes --semantic on
+mdsearch update --collection Notes --download
+mdsearch search "borrowing rules" --mode hybrid --collection Notes --no-rerank
+```
+
+To enable the default cross-encoder reranker, download it explicitly:
+
+```sh
+mdsearch model set --reranker bge-reranker-base --download
+mdsearch search "borrowing rules" --mode hybrid --collection Notes
+```
+
+Subsequent updates and searches use cached assets offline. To create a new
+collection with semantic indexing enabled from the start, use
+`collection create NAME PATH... --semantic`.
+
+### Maintain a collection
+
+After adding, changing, or deleting Markdown files, run `update -c Notes`.
+Use `update --all` to refresh every collection. To move or replace a vault,
+register the complete replacement source set first:
+
+```sh
+mdsearch collection configure Notes --sources ~/new-vault ~/reference.md
+mdsearch update -c Notes
+```
+
+Source replacement takes effect on the next successful update, including
+removing stored files that no longer belong to a registered source.
+
 ---
 
 ## Command reference
 
+| Command | Purpose |
+| --- | --- |
+| `collection create NAME PATH...` | Register sources; optionally enable semantic indexing with `--semantic`. |
+| `collection configure NAME` | Replace sources with `--sources` and/or change `--semantic on|off`. |
+| `collection list` | List collections, sources, and enabled indexes; supports `--json`. |
+| `collection delete NAME` | Delete stored collection data while retaining original files. |
+| `update -c NAME` / `update --all` | Refresh configured indexes from registered sources. |
+| `search QUERY...` | Retrieve lexical passages, or select `--mode hybrid`. |
+| `get PATH_OR_NAME -c NAME` / `get --id ID -c NAME` | Write exact stored file bytes. |
+| `status [-c NAME]` | Inspect index readiness, freshness, models, and build times. |
+| `model list` / `model set` | Inspect supported assets or change database-wide models. |
+| `graph neighbors KEY -c NAME` | Inspect outgoing graph relationships. |
+| `graph query QUERY -c NAME` | Execute a collection-bound GraphQL query. |
+
 ### Global options
 
 Every command accepts `-h/--help`. Commands that read or write the database
-accept `--database PATH`; the default is `~/.mdsearch/collections.db`.
+accept the global `--database PATH` option before, between, or after the command
+and its arguments; the default is `~/.mdsearch/collections.db`. Use `-c` as a
+short form of `--collection` and `-n` as a short form of `--limit` where those
+switches apply. Help and version write to stdout and exit 0. Argument errors
+write to stderr and exit 2; operational failures write to stderr and exit 1.
+Commands that need a default path require `HOME`; help and version do not.
+Use `mdsearch --version` to print the binary version, and append `--help` to
+any command to inspect its arguments.
 
-### `collection create NAME`
-
-Create a new empty collection.
-
-| Option | Description |
-| --- | --- |
-| `--database PATH` | Database file to use. |
+These invocations select the same database:
 
 ```sh
-mdsearch collection create Notes
-# created collection "Notes"
+mdsearch --database ./notes.db status -c Notes
+mdsearch status --database ./notes.db -c Notes
+mdsearch status -c Notes --database ./notes.db
 ```
 
-Names are normalized for comparison; creating an equivalent name again fails
-with a duplicate error.
+An explicit database path permits lexical updates, lexical search, file
+retrieval, graph inspection, collection listing, and status without `HOME`. Operations needing model assets also need a resolvable cache directory:
+`HF_HOME`, then `FASTEMBED_CACHE_DIR`, then `~/.mdsearch/models`. Lexical-only
+hybrid search with `--no-rerank` does not need model assets.
 
-### `collection list`
+### `collection create NAME PATH... [--semantic]`
 
-List all collections.
+Register one or more canonical Markdown file or directory sources without
+indexing. Semantic indexing is disabled by default. Names are compared
+case-insensitively; equivalent names cannot be created twice.
+
+```sh
+mdsearch collection create Notes ~/vault
+mdsearch collection create Reference ~/reference.md --semantic
+```
+
+### `collection configure NAME [--sources PATH...] [--semantic on|off]`
+
+Replace registered sources and/or change semantic policy; at least one option
+is required. Configuration does not index content. The next successful update
+deletes files stored only from removed sources. Disabling semantic indexing
+removes that collection's vectors during its next successful update.
+
+```sh
+mdsearch collection configure Notes --sources ~/vault ~/reference.md
+mdsearch collection configure Notes --semantic on
+```
+
+### `collection list [--json]`
+
+List canonical sources and enabled lexical, graph, and semantic indexes. JSON
+retains `name` and `sources` and adds an `indexes` object of enablement booleans.
 
 ```sh
 mdsearch collection list
-# Notes
+mdsearch collection list --json
 ```
 
-### `collection destroy NAME`
+### `collection delete NAME`
 
-Delete a collection and everything stored under it (files, passages, vectors,
-graph). This is destructive and permanent.
+Delete a collection's stored files and all indexes atomically. Original source
+files remain on disk.
 
 ```sh
-mdsearch collection destroy Notes
-# destroyed collection "Notes"
+mdsearch collection delete Notes
 ```
 
-### `collection add NAME PATH...`
+### `update (--collection NAME | --all) [--download] [--skip-unreadable] [--json]`
 
-Ingest one or more files or directories into a collection without indexing.
-Paths are read recursively; every `.md` file found is stored with its frontmatter
-parsed.
+Exactly one scope is required. Discover additions, modifications, and deletions
+across registered sources, deduplicate overlapping sources, and refresh lexical,
+graph, and enabled semantic indexes. Files and configured indexes commit
+atomically per collection. Any failure preserves that collection's previous
+state; `--all` continues with other collections and exits 1 if any fail.
+
+`--skip-unreadable` skips unreadable files while retaining their stored content.
+An inaccessible source directory aborts the collection update. `--download`
+authorizes missing model downloads; lexical-only updates require no models.
+Legacy collections must register sources before updating:
+
+```sh
+mdsearch collection configure Legacy --sources ~/vault
+mdsearch update --collection Legacy
+mdsearch update --all --json
+```
+
+JSON is one complete document containing `collections`, each with `name` and
+`success`. Successful entries report `added`, `modified`, `deleted`, `skipped`,
+and `malformed_frontmatter`; failed entries report `diagnostic`. Success goes to
+stdout. If any collection fails, the complete report goes to stderr, stdout is
+empty, and the process exits 1.
+
+### `search QUERY... [--mode lexical|hybrid]`
+
+Use lexical BM25 retrieval by default. Hybrid retrieval fuses lexical and semantic
+results and optionally reranks them with a local cross-encoder. Quoted queries
+and separate words are equivalent literal free text, including operator-looking
+characters. Empty or whitespace-only queries are rejected.
 
 | Option | Description |
 | --- | --- |
-| `--force` | Re-add files even if unchanged. |
-| `--database PATH` | Database file to use. |
+| `--mode lexical|hybrid` | Retrieval mode; default lexical. |
+| `-c, --collection NAME` | Restrict to one collection; default all built collections. |
+| `-n, --limit N` | Maximum results, 1–100; default 10. |
+| `--json` | Preserve mode-specific JSON fields and include mode/file identity. |
+| `--related` | Include related file links without changing ranking. |
+| `--no-rerank` | Disable reranking in hybrid mode; invalid in lexical mode. |
 
 ```sh
-mdsearch collection add Notes ~/vault
-# added 3 files to collection "Notes"
+mdsearch search borrowing rules -c Notes -n 5
+mdsearch search "borrowing rules" --mode hybrid -c Notes
+mdsearch search rust --mode hybrid --json --related --no-rerank
 ```
 
-### `collection update [NAME] [PATH...]`
+Human results identify collection, file ID, path, passage kind, score, and
+position. Empty searches explicitly print `no matches`. Hybrid search never
+downloads assets; missing prerequisites include a recovery command. Collections
+without semantic indexes can still contribute lexical passages. An uncached
+reranker falls back to fused ranking with the established warning.
 
-Re-index a collection (or all collections), reconciling files against the
-filesystem. This is the main indexing command: it upserts added/modified files,
-deletes removed ones, rebuilds the **lexical index**, and rebuilds the
-**entity graph** for each updated collection in one transaction. It does not
-build the semantic index (see [`embed`](#embed)).
+### `get PATH_OR_NAME --collection NAME` / `get --id ID --collection NAME`
 
-| Option | Description |
+Exactly one selector is required. Names resolve by exact stored path first,
+then unique basename; ambiguous names report candidate paths. Numeric names
+remain names. Only `--id` selects a positive stored file ID (1–9223372036854775807).
+Use the `file_id` returned by search; IDs are scoped to the selected collection.
+
+```sh
+mdsearch get rust.md -c Notes
+mdsearch get --id 3 -c Notes
+mdsearch get 42 -c Notes
+```
+
+Output is exactly the stored bytes: no added newline, text conversion, or JSON
+wrapper. Empty files emit no bytes; existing trailing newlines and non-UTF-8
+content are preserved.
+
+### `status [--collection NAME] [--json]`
+
+Report enabled indexes, readiness, stored-content freshness, selected global
+models, recorded semantic model/dimension, counts, and last successful builds.
+JSON reports each index's `enabled`, `readiness`, `freshness`, and `built_at`
+fields, plus applicable passage/node/edge counts and semantic model metadata.
+
+| Readiness | Meaning |
 | --- | --- |
-| `--all` | Update every collection in the database. |
-| `--force` | Treat all stored files as modified. |
-| `--database PATH` | Database file to use. |
+| `disabled` | Semantic indexing is disabled for the collection. |
+| `not_built` | Enabled index has no successful build; `built_at` and `freshness` are null. |
+| `ready` | Built index matches stored content and its active model configuration. |
+| `stale` | Built index differs from stored content or active model configuration. |
 
-`NAME` and `PATH...` are mutually exclusive with `--all`.
+Stale indexes retain their previous successful-build times. `freshness` is
+`current` or `stale` for built indexes; semantic `model_compatible` reports
+model/dimension compatibility separately. Disabling semantic policy can retain
+previous build metadata until the next successful update clears that index.
 
-```sh
-mdsearch collection update Notes ~/vault
-# updated collection "Notes": added 0, modified 0, deleted 0
-```
-
-The update is transactional per collection: if indexing fails, the collection's
-previous file/lexical/graph state is preserved.
-
-### `index status`
-
-Report lexical index state for each collection (file count, passage count, and
-last build time).
+Freshness compares indexes with **stored content**, without scanning registered
+sources. Pending filesystem edits do not make stored indexes stale; run update
+to incorporate them. Inspection is read-only and does not migrate legacy data.
 
 ```sh
-mdsearch index status
-# collection "Notes": lexical index built, 3 file(s), 9 passage(s), built at 1787178549
+mdsearch status
+mdsearch status -c Notes --json
 ```
 
-### `search QUERY`
+### `model list [--json]` / `model set [NAME] [--reranker NAME] [--download]`
 
-Lexical (BM25) ranked passage search across one collection or all collections.
-
-| Option | Description |
-| --- | --- |
-| `--collection NAME` | Restrict to one collection (default: all). |
-| `--limit N` | Maximum results (1–100, default 10). |
-| `--json` | Machine-readable JSON output. |
-| `--related` | Add file-to-file related links per result (see [Entity graph](#entity-graph)). |
-| `--database PATH` | Database file to use. |
+List supported models and local availability. Select database-wide models;
+provide at least one model choice. Embedding changes atomically rebuild affected
+semantic-enabled collections, including dimension changes. Reranker-only changes
+preserve vectors. Failed rebuilds preserve previous settings and indexes.
 
 ```sh
-mdsearch search rust --collection Notes --limit 5
-mdsearch search "memory safety" --json
-mdsearch search rust --collection Notes --related
+mdsearch model list --json
+mdsearch model set all-MiniLM-L6-v2 --download
+mdsearch model set --reranker bge-reranker-base --download
 ```
 
-Results show the file path, the passage kind (`title`, `tags`, `aliases`,
-`summary`, or `body`), a score, and the matched passage text. An empty or
-whitespace-only query is rejected.
+Downloads require `--download`. Asset caches follow `HF_HOME`, then
+`FASTEMBED_CACHE_DIR`, then `~/.mdsearch/models`.
 
-### `get COLLECTION NAME_OR_ID`
+### `graph neighbors KEY --collection NAME [--kind KIND] [--relation RELATION] [--depth N]`
 
-Retrieve a complete stored file by its name or its indexing-assigned ID.
+Inspect the selected collection's exact node key. Kind defaults to `file` and
+accepts `file`, `tag`, or `alias`; depth defaults to one hop and accepts 1–255.
+Relations use the existing vocabulary below. Traversal follows outgoing edges;
+tags and aliases normally have no outgoing neighbors because metadata edges
+point from files to those nodes. Results identify neighbor kind, key, title,
+relation, and depth.
 
 ```sh
-mdsearch get Notes rust.md
-mdsearch get Notes 3
+mdsearch graph neighbors /home/me/vault/rust.md -c Notes
+mdsearch graph neighbors rust -c Notes --kind tag --depth 2
+mdsearch graph neighbors /home/me/vault/rust.md -c Notes --relation LINKS_TO
 ```
 
-When the name is ambiguous (more than one file shares the basename), the command
-reports the candidate paths.
+### `graph query QUERY --collection NAME`
 
-### `embed`
-
-Build the semantic (vector) index for one or all collections, optionally
-selecting the embedding model and re-ranker.
-
-| Option | Description |
-| --- | --- |
-| `--collection NAME` | Restrict to one collection (default: all). |
-| `--model NAME` | Embedding model (default `all-MiniLM-L6-v2`). |
-| `--reranker NAME` | Cross-encoder re-ranker model. |
-| `--download` | Fetch model assets (required the first time). |
-| `--database PATH` | Database file to use. |
+Execute an in-process read-only GraphQL document. Every resolver is bound to
+CLI-selected collection context, including aliases and multiple roots. Public
+fields do not accept collection arguments; attempts to supply them fail query
+validation without graph data.
 
 ```sh
-mdsearch embed --collection Notes --download
-mdsearch embed
+mdsearch graph query '{ neighbors(kind: "file", key: "/home/me/vault/rust.md", maxHops: 2) { kind key title relation depth } }' -c Notes
 ```
 
-Without a cached model and `--download`, embedding fails with a clear message:
-
-```text
-embedding model all-MiniLM-L6-v2 is not available locally; pass --download to fetch it
-```
-
-Model assets fetched with `--download` are stored under
-`~/.mdsearch/models` by default (see
-[Models and external services](#models-and-external-services)); a model counts
-as downloaded once its completion marker exists there, regardless of the
-working directory you run `mdsearch` from.
-
-Embedding is skipped for collections with no files or no lexical index, and
-skipped when the index is already current for the file set.
-
-### `hybrid QUERY`
-
-Hybrid search: fuse lexical (BM25) and semantic (cosine) scores into one ranked
-list, optionally re-ranking with a cross-encoder.
-
-| Option | Description |
-| --- | --- |
-| `--collection NAME` | Restrict to one collection (default: all). |
-| `--limit N` | Maximum results (1–100, default 10). |
-| `--json` | Machine-readable JSON output. |
-| `--related` | Add file-to-file related links per result. |
-| `--no-rerank` | Skip cross-encoder re-ranking. |
-| `--database PATH` | Database file to use. |
-
-```sh
-mdsearch hybrid "borrowing rules" --collection Notes
-mdsearch hybrid rust --json --related --no-rerank
-```
-
-If the semantic index is stale (files changed since `embed`), hybrid reports that
-you should run `mdsearch embed`. If the re-ranker model is not cached, a warning
-is printed; pass `--no-rerank` to suppress it.
-
-### `graph neighbors ID`
-
-Debug inspection of a node's neighbors in the entity graph, with relation types
-and traversal depths (read-only).
-
-| Option | Description |
-| --- | --- |
-| `--collection NAME` | Restrict to one collection (default: search all). |
-| `--database PATH` | Database file to use. |
-
-```sh
-mdsearch graph neighbors ~/vault/rust.md --collection Notes
-```
-
-See [Entity graph](#entity-graph) for the node and relation vocabulary.
-
-### `context '<graphql query>'`
-
-Execute an in-process GraphQL query over the entity graph and print the JSON
-result. The query is passed as a single positional argument. Read-only.
-
-| Option | Description |
-| --- | --- |
-| `--collection NAME` | **Required.** The collection the query runs against. |
-| `--database PATH` | Database file to use. |
-
-```sh
-mdsearch context '{ neighbors(collection: "Notes", kind: "file", key: "~/vault/rust.md", maxHops: 2) { key relation depth } }' --collection Notes
-```
-
-The exposed schema mirrors the internal query layer:
-
-| Query | Arguments | Returns |
+| Field | Arguments | Returns |
 | --- | --- | --- |
-| `node(collection, kind, key)` | collection name, node kind (`file`/`tag`/`alias`), node key | The node's `kind`, `key`, `title`; errors if the node does not exist. |
-| `neighbors(collection, kind, key, relation?, maxHops)` | as above, optional relation filter (`LINKS_TO`, `TAGGED_WITH`, `ALIAS_OF`, `RELATED_TO`, `HAS_SOURCE`), hop limit | `[{ key, relation, depth }]`; errors if the start node does not exist. |
+| `node` | `kind`, `key` | `kind`, `key`, `title`; unknown nodes fail. |
+| `neighbors` | `kind`, `key`, optional `relation`, `maxHops` | Neighbor kind/key/title/relation/depth; unknown start nodes fail. |
 
-GraphQL remains in-process: no server or network endpoint is exposed.
+GraphQL is internal; no server or network endpoint is exposed.
+
+### Migration from the previous CLI
+
+The previous commands are rejected with argument errors (exit 2).
+
+| Previous invocation | Replacement |
+| --- | --- |
+| `collection create NAME` | `collection create NAME PATH...` |
+| `collection add NAME PATH...` | `collection configure NAME --sources PATH...`, then `update -c NAME` (configure replaces the source set) |
+| `collection update NAME [PATH...]` | Register sources, then `update -c NAME` |
+| `collection update --collection NAME` | `update --collection NAME` |
+| `collection update --all` | `update --all` |
+| `collection destroy NAME` | `collection delete NAME` |
+| `embed --collection NAME` | `collection configure NAME --semantic on`, then `update -c NAME` |
+| `embed [--download]` | Enable semantic policy on intended collections, then `update --all [--download]` |
+| `embed --model NAME [--reranker NAME]` | `model set NAME [--reranker NAME] [--download]` |
+| `embed --reranker NAME` | `model set --reranker NAME [--download]` |
+| `hybrid QUERY` | `search QUERY --mode hybrid` |
+| `get COLLECTION NAME` | `get NAME -c COLLECTION` |
+| `get COLLECTION ID` | `get --id ID -c COLLECTION` |
+| `index status` | `status [--collection NAME] [--json]` |
+| `graph neighbors KEY` | `graph neighbors KEY -c NAME [--kind KIND] [--depth N]` |
+| `context QUERY --collection NAME` | `graph query QUERY -c NAME`; remove collection arguments from query fields |
+| `--force` | `--skip-unreadable` skips read failures; it does not force reprocessing |
+
+Existing collections and semantic enablement are preserved. Migration does not
+guess source directories. Read commands never create a missing database or
+migrate existing data; authorized mutation paths apply existing migrations.
 
 ---
 
@@ -409,35 +483,37 @@ match a stored file are skipped (no edge, no error).
 
 ### `--related`
 
-`--related` on `search`/`hybrid` lists each result's **file-to-file** related
+`--related` on `search` in either mode lists each result's **file-to-file** related
 links only (`LINKS_TO`, `RELATED_TO`, `HAS_SOURCE`); tags and aliases are
 omitted. In human output each link is one line; in JSON output it is a
 `related` field per result. Ranked results are never changed by `--related`.
 
 ```text
-1. ~/vault/rust.md:6-7 (body, score 0.105)
+1. /home/me/vault/rust.md:6-7 (body, score 0.105) [Notes, file_id 1]
 # Rust
 Ownership is key. See [Borrowing](sub/borrowing.md).
-related: ~/vault/sub/borrowing.md (LINKS_TO)
+related: /home/me/vault/sub/borrowing.md (LINKS_TO)
 ```
 
 ---
 
 ## JSON output
 
-`--json` on `search`/`hybrid` emits a richer machine-readable object. The `--related`
+`--json` on `search` in either mode emits a richer machine-readable object. The `--related`
 switch adds a `related` field to each result. Example `search` JSON:
 
 ```json
 {
+  "mode": "lexical",
   "query": "rust",
   "scope": "Notes",
   "limit": 10,
-  "total": 4,
+  "total": 1,
   "results": [
     {
       "collection": "Notes",
-      "path": "~/vault/sub/borrowing.md",
+      "file_id": 3,
+      "path": "/home/me/vault/sub/borrowing.md",
       "kind": "tags",
       "text": "rust",
       "score": 0.272,
@@ -457,16 +533,60 @@ With `--related`, each result gains:
 ```json
 {
   "related": [
-    { "path": "~/vault/rust.md", "relation": "RELATED_TO" }
+    { "path": "/home/me/vault/rust.md", "relation": "RELATED_TO" }
   ]
 }
 ```
 
-`hybrid --json` additionally reports `reranked`, `rerank_warning`, and per-result
+`search --mode hybrid --json` reports `reranked`, `rerank_warning`, and per-result
 `reranker_score`, `fused_score`, `bm25_score`, `cosine_similarity`, and
 `ordering_score`.
 
 `get` returns the raw stored file content (no JSON mode).
+
+### Collection and update reports
+
+`collection list --json` returns a `collections` array:
+
+```json
+{
+  "collections": [
+    {
+      "name": "Notes",
+      "sources": ["/home/me/vault"],
+      "indexes": { "lexical": true, "graph": true, "semantic": false }
+    }
+  ]
+}
+```
+
+`update --all --json` returns one complete report. For example, a partial
+failure writes this document to stderr and exits 1; successful collections
+have already committed their updates:
+
+```json
+{
+  "collections": [
+    {
+      "name": "Archive",
+      "success": false,
+      "diagnostic": "source directory is unavailable"
+    },
+    {
+      "name": "Notes",
+      "success": true,
+      "added": 1,
+      "modified": 2,
+      "deleted": 0,
+      "skipped": 0,
+      "malformed_frontmatter": 0
+    }
+  ]
+}
+```
+
+For scripts, check the exit status and read the report from the corresponding
+stream. A fully successful update writes its JSON report to stdout.
 
 ---
 
@@ -492,43 +612,43 @@ Scalar or inline list values are supported (e.g. `tags: rust` or
 
 ## Indexing model
 
-- `collection add` stores files; nothing is indexed yet.
-- `collection update` reconciles the file set (adds/modifies/deletes) and
-  rebuilds the **lexical index** and **entity graph** for each updated
-  collection. It is deterministic and idempotent: re-running on unchanged files
-  changes nothing.
-- `embed` builds the **semantic index** from the stored files/passages; it is
-  skipped when already current for the file set.
-- There is no file watching. Re-run `update` (and `embed` when semantic results
-  matter) after changing files on disk.
-- Existing databases migrate forward automatically when opened; migration is
+- Collection create/configure register sources and policy without indexing.
+- `update` reconciles the file set (adds/modifies/deletes) and
+  rebuilds the **lexical index**, **entity graph**, and enabled **semantic
+  index** for each updated collection. Unchanged files retain their
+  stored content; successful rebuilds refresh index build metadata.
+- Semantic indexing is opt-in per collection. Configuration changes take
+  effect during the next successful update; turning it off clears that
+  collection's vectors during the update.
+- There is no file watching. Re-run `update` after changing files on
+  disk.
+- Existing databases migrate on authorized mutation paths; migration is
   idempotent and never rewrites stored file, lexical, or semantic data.
 
 ---
 
 ## Models and external services
 
-- Embedding (`embed`, `hybrid`) uses `fastembed` locally. The default model is
+- Embedding (semantic updates and hybrid search) uses `fastembed` locally. The default model is
   `all-MiniLM-L6-v2`. Model assets are downloaded with `--download` and then
   cached locally; all later runs are offline.
 - Downloaded assets live in the model cache directory, resolved per run as:
   `HF_HOME`, then `FASTEMBED_CACHE_DIR`, then `~/.mdsearch/models`. A model is
   considered downloaded when its completion marker exists in that directory,
-  so `embed`/`hybrid` never re-download (or advise re-downloading) a model
+  so semantic updates and hybrid search never re-download (or advise re-downloading) a model
   that is already present. Legacy downloads in an old working-directory
   `.fastembed_cache` are not reused; they are fetched once into the new
   location.
-- A cross-encoder re-ranker can be selected with `--reranker NAME` for `hybrid`;
+- A cross-encoder re-ranker can be selected with `model set --reranker NAME` for hybrid search;
   its assets follow the same cache location and marker rules.
-- Everything else (`search`, `get`, `graph`, `context`, index/collection
-  lifecycle) requires no models and no network.
+- Lexical search, `get`, `graph`, status, and collection inspection require no models and no network.
 
 ---
 
 ## Scope and boundaries
 
 - **Retrieval only.** No answer generation; the harness/LLM synthesizes.
-- **No file watching.** Indexing is driven by explicit `update`/`embed`.
+- **No file watching.** Indexing is driven by explicit `update`.
 - **Single binary, single database file.** No server, web UI, multi-user,
   authentication, cloud sync, or hosted collections.
 - **External services are opt-in** via CLI switches (`--download` for models);

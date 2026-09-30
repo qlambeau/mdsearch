@@ -7,15 +7,25 @@ use std::process::Command;
 use rstest::rstest;
 use tempfile::tempdir;
 
-use kv_app::run;
+mod common;
+use common::run;
 
 /// Covers: FR-001, FR-002, FR-008, and FR-010 — destroy at the default database.
 #[test]
 fn destroys_a_collection_at_the_default_database_path() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
-    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "create",
+            "Notes",
+            home.path().to_str().ok_or("UTF-8 fixture path required")?,
+        ],
+        home.path(),
+    )?;
 
-    let output = run(["mdsearch", "collection", "destroy", "Notes"], home.path())?;
+    let output = run(["mdsearch", "collection", "delete", "Notes"], home.path())?;
 
     assert_eq!(output, "destroyed collection \"Notes\"");
     assert_eq!(run(["mdsearch", "collection", "list"], home.path())?, "");
@@ -27,9 +37,18 @@ fn destroys_a_collection_at_the_default_database_path() -> Result<(), Box<dyn Er
 #[test]
 fn destroys_a_collection_case_insensitively() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
-    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "create",
+            "Notes",
+            home.path().to_str().ok_or("UTF-8 fixture path required")?,
+        ],
+        home.path(),
+    )?;
 
-    let output = run(["mdsearch", "collection", "destroy", "notes"], home.path())?;
+    let output = run(["mdsearch", "collection", "delete", "notes"], home.path())?;
 
     assert_eq!(output, "destroyed collection \"Notes\"");
 
@@ -40,14 +59,32 @@ fn destroys_a_collection_case_insensitively() -> Result<(), Box<dyn Error>> {
 #[test]
 fn destroys_one_collection_without_disturbing_others() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
-    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
-    run(["mdsearch", "collection", "create", "Archive"], home.path())?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "create",
+            "Notes",
+            home.path().to_str().ok_or("UTF-8 fixture path required")?,
+        ],
+        home.path(),
+    )?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "create",
+            "Archive",
+            home.path().to_str().ok_or("UTF-8 fixture path required")?,
+        ],
+        home.path(),
+    )?;
 
-    run(["mdsearch", "collection", "destroy", "Notes"], home.path())?;
+    run(["mdsearch", "collection", "delete", "Notes"], home.path())?;
 
     assert_eq!(
         run(["mdsearch", "collection", "list"], home.path())?,
-        "Archive"
+        format!("Archive [lexical, graph]\n  {}", home.path().display())
     );
 
     Ok(())
@@ -57,19 +94,25 @@ fn destroys_one_collection_without_disturbing_others() -> Result<(), Box<dyn Err
 #[test]
 fn fails_for_a_non_existent_collection() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
-    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
-
-    let error = run(
-        ["mdsearch", "collection", "destroy", "Missing"],
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "create",
+            "Notes",
+            home.path().to_str().ok_or("UTF-8 fixture path required")?,
+        ],
         home.path(),
-    )
-    .err()
-    .ok_or_else(|| std::io::Error::other("a missing collection should fail to destroy"))?;
+    )?;
+
+    let error = run(["mdsearch", "collection", "delete", "Missing"], home.path())
+        .err()
+        .ok_or_else(|| std::io::Error::other("a missing collection should fail to destroy"))?;
 
     assert!(error.to_string().contains("not found"));
     assert_eq!(
         run(["mdsearch", "collection", "list"], home.path())?,
-        "Notes"
+        format!("Notes [lexical, graph]\n  {}", home.path().display())
     );
 
     Ok(())
@@ -88,7 +131,7 @@ fn fails_for_a_missing_database_without_creating_it() -> Result<(), Box<dyn Erro
         [
             "mdsearch",
             "collection",
-            "destroy",
+            "delete",
             "Notes",
             "--database",
             database_argument,
@@ -133,7 +176,7 @@ fn recreating_a_collection_surfaces_no_stale_data() -> Result<(), Box<dyn Error>
         [
             "mdsearch",
             "collection",
-            "destroy",
+            "delete",
             "Notes",
             "--database",
             database_argument,
@@ -159,7 +202,7 @@ fn recreating_a_collection_surfaces_no_stale_data() -> Result<(), Box<dyn Error>
         home.path(),
     )?;
     assert!(
-        stale_search.is_empty(),
+        stale_search == "no matches",
         "stale search output: {stale_search}"
     );
 
@@ -176,13 +219,7 @@ fn recreating_a_collection_surfaces_no_stale_data() -> Result<(), Box<dyn Error>
     assert!(current_search.contains("beta content"));
 
     let status = run(
-        [
-            "mdsearch",
-            "index",
-            "status",
-            "--database",
-            database_argument,
-        ],
+        ["mdsearch", "status", "--database", database_argument],
         home.path(),
     )?;
     assert!(
@@ -209,16 +246,29 @@ fn build_collection(
         ),
         content,
     )?;
-    for command in [
-        vec!["collection", "create", collection],
-        vec!["collection", "add", collection, file_argument],
-        vec!["collection", "update", collection, file_argument],
-    ] {
-        let mut args = vec!["mdsearch"];
-        args.extend(command.iter().copied());
-        args.extend(["--database", database_argument]);
-        run(&args, home)?;
-    }
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "create",
+            collection,
+            file_argument,
+            "--database",
+            database_argument,
+        ],
+        home,
+    )?;
+    run(
+        [
+            "mdsearch",
+            "update",
+            "--collection",
+            collection,
+            "--database",
+            database_argument,
+        ],
+        home,
+    )?;
     Ok(())
 }
 
@@ -231,16 +281,25 @@ fn build_collection(
 #[case("Notes\n2026")]
 fn rejects_invalid_collection_names(#[case] name: &str) -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
-    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "create",
+            "Notes",
+            home.path().to_str().ok_or("UTF-8 fixture path required")?,
+        ],
+        home.path(),
+    )?;
 
-    let error = run(["mdsearch", "collection", "destroy", name], home.path())
+    let error = run(["mdsearch", "collection", "delete", name], home.path())
         .err()
         .ok_or_else(|| std::io::Error::other("an invalid collection name should fail"))?;
 
     assert!(error.to_string().contains("collection name"));
     assert_eq!(
         run(["mdsearch", "collection", "list"], home.path())?,
-        "Notes"
+        format!("Notes [lexical, graph]\n  {}", home.path().display())
     );
 
     Ok(())
@@ -261,6 +320,7 @@ fn destroys_a_collection_at_the_explicit_database_path() -> Result<(), Box<dyn E
             "collection",
             "create",
             "Project Notes",
+            home.path().to_str().ok_or("UTF-8 fixture path required")?,
             "--database",
             database_argument,
         ],
@@ -271,7 +331,7 @@ fn destroys_a_collection_at_the_explicit_database_path() -> Result<(), Box<dyn E
         [
             "mdsearch",
             "collection",
-            "destroy",
+            "delete",
             "Project Notes",
             "--database",
             database_argument,
@@ -288,10 +348,19 @@ fn destroys_a_collection_at_the_explicit_database_path() -> Result<(), Box<dyn E
 #[test]
 fn binary_destroys_a_collection() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
-    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "create",
+            "Notes",
+            home.path().to_str().ok_or("UTF-8 fixture path required")?,
+        ],
+        home.path(),
+    )?;
 
     let output = Command::new(env!("CARGO_BIN_EXE_mdsearch"))
-        .args(["collection", "destroy", "Notes"])
+        .args(["collection", "delete", "Notes"])
         .env("HOME", home.path())
         .output()?;
 

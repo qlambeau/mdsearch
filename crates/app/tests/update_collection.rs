@@ -1,335 +1,242 @@
-//! Acceptance tests for the `mdsearch collection update` command.
+//! Acceptance tests for registered-source collection updates.
 
 use std::error::Error;
 use std::fs;
-use std::path::Path;
+use std::process::Command;
 
 use tempfile::tempdir;
 
-use kv_app::run;
+mod common;
+use common::run;
+use kv_application::FileRecord;
+use kv_application::{CollectionStore, FileStore};
+use kv_domain::{CollectionName, Timestamp};
+use kv_store_sqlite::{SqliteCollectionStore, SqliteFileStore};
 
-fn path_argument(path: &Path) -> Result<&str, std::io::Error> {
-    path.to_str()
-        .ok_or_else(|| std::io::Error::other("the test path should be UTF-8"))
+fn update(home: &std::path::Path, name: &str) -> Result<String, kv_app::AppError> {
+    run(["mdsearch", "update", "--collection", name], home)
 }
 
-/// Covers: FR-006 and FR-015 — a new file is reported as added.
+/// Covers: REQ-021 FR-004, FR-006 — updates discover newly added files from saved sources.
 #[test]
-fn updates_reports_added_files() -> Result<(), Box<dyn Error>> {
+fn discovers_additions_and_modifications_from_registered_roots() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
     let vault = home.path().join("vault");
     fs::create_dir_all(&vault)?;
     fs::write(vault.join("a.md"), "alpha")?;
-
-    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
     run(
         [
             "mdsearch",
             "collection",
-            "add",
+            "create",
             "Notes",
-            path_argument(&vault)?,
+            vault.to_str().ok_or("path")?,
         ],
         home.path(),
     )?;
 
+    let first = update(home.path(), "Notes")?;
+    assert!(first.contains("added 1, modified 0, deleted 0"));
+    fs::write(vault.join("a.md"), "edited alpha")?;
+    let modified = update(home.path(), "Notes")?;
+    assert!(modified.contains("added 0, modified 1, deleted 0"));
     fs::write(vault.join("b.md"), "beta")?;
-
-    let output = run(
-        [
-            "mdsearch",
-            "collection",
-            "update",
-            "Notes",
-            path_argument(&vault)?,
-        ],
-        home.path(),
-    )?;
-
-    assert_eq!(
-        output,
-        "updated collection \"Notes\": added 1, modified 0, deleted 0"
-    );
+    let second = update(home.path(), "Notes")?;
+    assert!(second.contains("added 1, modified 0, deleted 0"));
 
     Ok(())
 }
 
-/// Covers: FR-007 — a modified file is reported.
+/// Covers: REQ-021 FR-005, FR-007 — overlapping sources deduplicate and configure removes exclusive files on update.
 #[test]
-fn updates_reports_modified_files() -> Result<(), Box<dyn Error>> {
+fn deduplicates_overlapping_sources_and_removes_files_after_reconfiguration()
+-> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
-    let vault = home.path().join("vault");
-    fs::create_dir_all(&vault)?;
-    fs::write(vault.join("a.md"), "alpha")?;
-
-    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
+    let root = home.path().join("vault");
+    let nested = root.join("nested");
+    fs::create_dir_all(&nested)?;
+    fs::write(nested.join("a.md"), "alpha")?;
+    let root_arg = root.to_str().ok_or("path")?;
+    let nested_arg = nested.to_str().ok_or("path")?;
     run(
         [
             "mdsearch",
             "collection",
-            "add",
+            "create",
             "Notes",
-            path_argument(&vault)?,
+            root_arg,
+            nested_arg,
         ],
         home.path(),
     )?;
+    let initial = update(home.path(), "Notes")?;
+    assert!(initial.contains("added 1, modified 0, deleted 0"));
 
-    fs::write(vault.join("a.md"), "changed")?;
-
-    let output = run(
+    let configure_error = run(
         [
             "mdsearch",
             "collection",
-            "update",
+            "configure",
             "Notes",
-            path_argument(&vault)?,
-        ],
-        home.path(),
-    )?;
-
-    assert_eq!(
-        output,
-        "updated collection \"Notes\": added 0, modified 1, deleted 0"
-    );
-
-    Ok(())
-}
-
-/// Covers: FR-008 — a deleted file is reported.
-#[test]
-fn updates_reports_deleted_files() -> Result<(), Box<dyn Error>> {
-    let home = tempdir()?;
-    let vault = home.path().join("vault");
-    fs::create_dir_all(&vault)?;
-    fs::write(vault.join("a.md"), "alpha")?;
-
-    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
-    run(
-        [
-            "mdsearch",
-            "collection",
-            "add",
-            "Notes",
-            path_argument(&vault)?,
-        ],
-        home.path(),
-    )?;
-
-    fs::remove_file(vault.join("a.md"))?;
-
-    let output = run(
-        [
-            "mdsearch",
-            "collection",
-            "update",
-            "Notes",
-            path_argument(&vault)?,
-        ],
-        home.path(),
-    )?;
-
-    assert_eq!(
-        output,
-        "updated collection \"Notes\": added 0, modified 0, deleted 1"
-    );
-
-    Ok(())
-}
-
-/// Covers: FR-009 — an unchanged collection reports zero changes.
-#[test]
-fn updates_reports_no_changes_for_an_unchanged_collection() -> Result<(), Box<dyn Error>> {
-    let home = tempdir()?;
-    let vault = home.path().join("vault");
-    fs::create_dir_all(&vault)?;
-    fs::write(vault.join("a.md"), "alpha")?;
-
-    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
-    run(
-        [
-            "mdsearch",
-            "collection",
-            "add",
-            "Notes",
-            path_argument(&vault)?,
-        ],
-        home.path(),
-    )?;
-
-    let output = run(
-        [
-            "mdsearch",
-            "collection",
-            "update",
-            "Notes",
-            path_argument(&vault)?,
-        ],
-        home.path(),
-    )?;
-
-    assert_eq!(
-        output,
-        "updated collection \"Notes\": added 0, modified 0, deleted 0"
-    );
-
-    Ok(())
-}
-
-/// Covers: FR-010 — `--all` emits one line per collection.
-#[test]
-fn updates_all_collections() -> Result<(), Box<dyn Error>> {
-    let home = tempdir()?;
-    let a = home.path().join("a.md");
-    let b = home.path().join("b.md");
-    fs::write(&a, "alpha")?;
-    fs::write(&b, "beta")?;
-
-    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
-    run(["mdsearch", "collection", "create", "Archive"], home.path())?;
-    run(
-        ["mdsearch", "collection", "add", "Notes", path_argument(&a)?],
-        home.path(),
-    )?;
-    run(
-        [
-            "mdsearch",
-            "collection",
-            "add",
-            "Archive",
-            path_argument(&b)?,
-        ],
-        home.path(),
-    )?;
-
-    fs::write(&a, "edited")?;
-
-    let output = run(["mdsearch", "collection", "update", "--all"], home.path())?;
-
-    let lines = output.lines().collect::<Vec<_>>();
-    assert_eq!(lines.len(), 2);
-    assert!(
-        lines
-            .iter()
-            .any(|line| line.contains("\"Archive\": added 0, modified 0, deleted 0"))
-    );
-    assert!(
-        lines
-            .iter()
-            .any(|line| line.contains("\"Notes\": added 0, modified 1, deleted 0"))
-    );
-
-    Ok(())
-}
-
-/// Covers: FR-011 — an unreadable path fails.
-#[test]
-fn updates_fails_for_an_unreadable_path() -> Result<(), Box<dyn Error>> {
-    let home = tempdir()?;
-    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
-    let missing = home.path().join("missing.md");
-
-    let error = run(
-        [
-            "mdsearch",
-            "collection",
-            "update",
-            "Notes",
-            path_argument(&missing)?,
+            "--sources",
+            home.path().join("empty").to_str().ok_or("path")?,
         ],
         home.path(),
     )
     .err()
-    .ok_or_else(|| std::io::Error::other("an unreadable path should fail"))?;
+    .ok_or("a missing source directory should fail configuration")?;
+    assert!(configure_error.to_string().contains("unreadable"));
+    fs::create_dir(home.path().join("empty"))?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "configure",
+            "Notes",
+            "--sources",
+            home.path().join("empty").to_str().ok_or("path")?,
+        ],
+        home.path(),
+    )?;
+    let reconciled = update(home.path(), "Notes")?;
+    assert!(reconciled.contains("added 0, modified 0, deleted 1"));
 
+    Ok(())
+}
+
+/// Covers: REQ-021 FR-012 — legacy source-less collections receive actionable update guidance.
+#[test]
+fn source_less_collections_require_explicit_registration() -> Result<(), Box<dyn Error>> {
+    let home = tempdir()?;
+    let database = home.path().join(".mdsearch/collections.db");
+    let collection = CollectionName::try_from("Legacy")?;
+    SqliteCollectionStore::open(&database)?
+        .create_collection(&collection, Timestamp::from_unix_seconds(1_700_000_000))?;
+    let file = home.path().join("legacy.md");
+    fs::write(&file, "searchable legacy content")?;
+    SqliteFileStore::open_for_ingestion(&database)?.reconcile(
+        &collection,
+        &[FileRecord::new(file, b"searchable legacy content".to_vec())],
+        &[],
+        Timestamp::from_unix_seconds(1_700_000_000),
+    )?;
+
+    let error = update(home.path(), "Legacy")
+        .err()
+        .ok_or("expected update failure")?;
+    assert!(error.to_string().contains("configure sources"));
+    let search = run(
+        ["mdsearch", "search", "searchable", "--collection", "Legacy"],
+        home.path(),
+    )?;
+    assert!(search.contains("legacy.md"));
+
+    Ok(())
+}
+
+/// Covers: REQ-021 FR-011 — update-all continues and reports each collection after failures.
+#[test]
+fn update_all_reports_all_collections_when_one_has_no_sources() -> Result<(), Box<dyn Error>> {
+    let home = tempdir()?;
+    let source = home.path().join("source");
+    fs::create_dir(&source)?;
+    fs::write(source.join("a.md"), "alpha")?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "create",
+            "Configured",
+            source.to_str().ok_or("path")?,
+        ],
+        home.path(),
+    )?;
+    SqliteCollectionStore::open(&home.path().join(".mdsearch/collections.db"))?.create_collection(
+        &CollectionName::try_from("Legacy")?,
+        Timestamp::from_unix_seconds(42),
+    )?;
+
+    let error = run(["mdsearch", "update", "--all"], home.path())
+        .err()
+        .ok_or("expected partial failure")?;
+    let report = error.to_string();
+    assert!(report.contains("Configured"));
+    assert!(report.contains("Legacy"));
+    assert!(report.contains("added 1"));
+
+    Ok(())
+}
+
+/// Covers: REQ-021 FR-008 — an inaccessible directory aborts without losing the prior lexical index.
+#[test]
+fn inaccessible_source_preserves_the_last_committed_index() -> Result<(), Box<dyn Error>> {
+    let home = tempdir()?;
+    let source = home.path().join("source");
+    fs::create_dir(&source)?;
+    fs::write(source.join("a.md"), "retainedword")?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "create",
+            "Notes",
+            source.to_str().ok_or("path")?,
+        ],
+        home.path(),
+    )?;
+    update(home.path(), "Notes")?;
+    fs::remove_dir_all(&source)?;
+
+    let error = update(home.path(), "Notes")
+        .err()
+        .ok_or("expected inaccessible source error")?;
     assert!(error.to_string().contains("unreadable"));
-
-    Ok(())
-}
-
-/// Covers: FR-012 — `--force` skips unreadable paths.
-#[test]
-fn updates_skips_unreadable_paths_with_force() -> Result<(), Box<dyn Error>> {
-    let home = tempdir()?;
-    let vault = home.path().join("vault");
-    fs::create_dir_all(&vault)?;
-    fs::write(vault.join("a.md"), "alpha")?;
-    let missing = home.path().join("missing.md");
-
-    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
-
-    let output = run(
+    let search = run(
         [
             "mdsearch",
-            "collection",
-            "update",
+            "search",
+            "retainedword",
+            "--collection",
             "Notes",
-            path_argument(&missing)?,
-            path_argument(&vault)?,
-            "--force",
         ],
         home.path(),
     )?;
-
-    assert_eq!(
-        output,
-        "updated collection \"Notes\": added 1, modified 0, deleted 0 (skipped 1)"
-    );
+    assert!(search.contains("a.md"));
 
     Ok(())
 }
 
-/// Covers: FR-013 — a missing collection fails.
+/// Covers: REQ-021 FR-011 — the executable exits unsuccessfully after reporting every update-all outcome.
 #[test]
-fn updates_reports_a_missing_collection() -> Result<(), Box<dyn Error>> {
+fn update_all_binary_reports_partial_failure_and_nonzero_exit() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
-    let file = home.path().join("a.md");
-    fs::write(&file, "alpha")?;
-    run(["mdsearch", "collection", "create", "Other"], home.path())?;
-
-    let error = run(
+    let source = home.path().join("source");
+    fs::create_dir(&source)?;
+    fs::write(source.join("a.md"), "alpha")?;
+    run(
         [
             "mdsearch",
             "collection",
-            "update",
-            "Notes",
-            path_argument(&file)?,
+            "create",
+            "Configured",
+            source.to_str().ok_or("path")?,
         ],
         home.path(),
-    )
-    .err()
-    .ok_or_else(|| std::io::Error::other("a missing collection should fail"))?;
+    )?;
+    SqliteCollectionStore::open(&home.path().join(".mdsearch/collections.db"))?.create_collection(
+        &CollectionName::try_from("Legacy")?,
+        Timestamp::from_unix_seconds(42),
+    )?;
 
-    assert!(error.to_string().contains("not found"));
-
-    Ok(())
-}
-
-/// Covers: FR-014 — a missing database fails without creation.
-#[test]
-fn updates_reports_a_missing_database_without_creating_it() -> Result<(), Box<dyn Error>> {
-    let home = tempdir()?;
-    let file = home.path().join("a.md");
-    fs::write(&file, "alpha")?;
-    let database_path = home.path().join("custom").join("collections.db");
-    let database_argument = path_argument(&database_path)?;
-
-    let error = run(
-        [
-            "mdsearch",
-            "collection",
-            "update",
-            "Notes",
-            path_argument(&file)?,
-            "--database",
-            database_argument,
-        ],
-        home.path(),
-    )
-    .err()
-    .ok_or_else(|| std::io::Error::other("a missing database should fail"))?;
-
-    assert!(error.to_string().contains("does not exist"));
-    assert!(!database_path.exists());
+    let output = Command::new(env!("CARGO_BIN_EXE_mdsearch"))
+        .args(["update", "--all"])
+        .env("HOME", home.path())
+        .output()?;
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(!output.status.success());
+    assert!(stderr.contains("Configured"));
+    assert!(stderr.contains("Legacy"));
+    assert!(stderr.contains("configure sources"));
 
     Ok(())
 }

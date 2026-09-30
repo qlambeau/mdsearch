@@ -1,4 +1,5 @@
 mod clock;
+mod collection_source_store;
 mod collection_store;
 mod embedding_generator;
 mod file_retrieval_store;
@@ -6,14 +7,18 @@ mod file_store;
 mod file_system;
 mod graph_store;
 mod hybrid_search_store;
+mod index_inspection_store;
 mod lexical_index_store;
 mod lexical_search_store;
 mod reranker;
 mod semantic_index_store;
 
 pub use clock::Clock;
+#[cfg(test)]
+pub use collection_source_store::fake as collection_source_store_fake;
+pub use collection_source_store::{CollectionSourceStore, CollectionSourceSummary};
 pub use collection_store::CollectionStore;
-pub use embedding_generator::EmbeddingGenerator;
+pub use embedding_generator::{EmbeddingGenerator, ModelAvailability};
 pub use file_retrieval_store::{FileRetrievalStore, RetrievedFile};
 pub use file_store::{FileRecord, FileStore, ReconcileOutcome, StoredFile};
 pub use file_system::FileSystem;
@@ -21,7 +26,14 @@ pub use graph_store::{GraphStore, InMemoryGraphStore, Neighbor, traverse_graph};
 pub use hybrid_search_store::{HybridCandidate, HybridCandidates, HybridSearchStore};
 pub use lexical_index_store::{IndexState, IndexStatus, LexicalIndexStore, SemanticStatus};
 pub use lexical_search_store::{
-    LexicalSearchStore, Position, SearchResult, SearchResultSet, SearchScope,
+    LexicalSearchStore, Position, SearchFile, SearchResult, SearchResultSet, SearchScope,
 };
 pub use reranker::Reranker;
-pub use semantic_index_store::{EmbedTarget, SemanticIndexStore};
+pub use semantic_index_store::{
+    CollectionIndexUpdate, EmbedTarget, PreparedSemanticCollection, PreparedSemanticPassage,
+    SemanticIndexStore,
+};
+
+pub use index_inspection_store::{
+    CollectionIndexInspection, DatabaseIndexInspection, IndexInspection, IndexInspectionStore,
+};

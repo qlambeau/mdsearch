@@ -32,6 +32,7 @@ pub struct HybridScores {
 /// One fused and optionally re-ranked hybrid search result.
 #[derive(Clone, Debug)]
 pub struct HybridResult {
+    file_id: kv_domain::FileId,
     collection: CollectionName,
     path: PathBuf,
     kind: PassageKind,
@@ -45,6 +46,7 @@ impl HybridResult {
     #[must_use]
     pub fn new(candidate: &HybridCandidate, scores: HybridScores) -> Self {
         Self {
+            file_id: candidate.key().file(),
             collection: candidate.collection().clone(),
             path: candidate.path().to_owned(),
             kind: candidate.kind(),
@@ -52,6 +54,12 @@ impl HybridResult {
             position: candidate.position(),
             scores,
         }
+    }
+
+    /// Returns the explicit stored file ID (REQ-023 FR-015).
+    #[must_use]
+    pub const fn file_id(&self) -> kv_domain::FileId {
+        self.file_id
     }
 
     /// Returns the collection the passage belongs to.

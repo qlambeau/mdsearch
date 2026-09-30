@@ -7,7 +7,7 @@ use kv_application::{GraphStore, GraphStoreError, Neighbor};
 use kv_domain::{CollectionName, EntityKind, GraphNode, NodeId, RelationKind};
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::CollectionStoreError;
+use kv_application::CollectionStoreError;
 
 /// Reads an entity graph from the `nodes`/`edges` tables of a `SQLite` database.
 pub struct SqliteGraphStore {

@@ -1,9 +1,13 @@
 use kv_domain::RerankerModel;
 
-use crate::RerankError;
+use crate::{ModelAvailability, RerankError};
 
 /// Re-scores candidate documents against a query with a local cross-encoder.
 pub trait Reranker {
+    /// Returns supported re-ranker models and local cache state.
+    fn models(&self) -> Vec<ModelAvailability> {
+        Vec::new()
+    }
     /// Ensures the model's assets are available locally, downloading them when
     /// `download` is set.
     ///

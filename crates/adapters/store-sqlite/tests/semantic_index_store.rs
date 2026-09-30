@@ -3,7 +3,10 @@
 use std::error::Error;
 use std::path::Path;
 
-use kv_application::{CollectionStore, FileRecord, FileStore, SemanticIndexStore};
+use kv_application::{
+    CollectionIndexUpdate, CollectionStore, FileRecord, FileRetrievalStore, FileStore,
+    PreparedSemanticCollection, PreparedSemanticPassage, SemanticIndexStore,
+};
 use kv_domain::{
     CollectionName, ContentHash, Embedding, EmbeddingModel, FileId, PassageKind, SemanticPassage,
     Timestamp,
@@ -15,7 +18,9 @@ use sqlite3_ext::Connection as ExtensionConnection;
 use sqlite3_ext::vtab::{Module, StandardModule};
 use tempfile::tempdir;
 
-use kv_store_sqlite::{SqliteCollectionStore, SqliteFileStore, SqliteSemanticIndexStore};
+use kv_store_sqlite::{
+    SqliteCollectionStore, SqliteFileRetrievalStore, SqliteFileStore, SqliteSemanticIndexStore,
+};
 
 fn open_with_vector(path: &Path) -> Result<Connection, Box<dyn Error>> {
     let connection = Connection::open(path)?;
@@ -489,6 +494,287 @@ fn rebuild_recreates_the_table_when_the_dimension_changes() -> Result<(), Box<dy
     let vector_count = vector_count(&database_path, "Notes")?;
     assert_eq!(vector_count, 2);
 
+    Ok(())
+}
+
+/// Covers: REQ-022 FR-011 — model setting, dimension, and all vectors switch together.
+#[test]
+fn rebuild_all_commits_global_model_and_multiple_collection_vectors_atomically()
+-> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let database_path = directory.path().join("collections.db");
+    let notes = name("Notes")?;
+    let archive = name("Archive")?;
+    build(directory.path(), &notes, &[("notes.md", "notes body")])?;
+    build(
+        directory.path(),
+        &archive,
+        &[("archive.md", "archive body")],
+    )?;
+    let mut store = SqliteSemanticIndexStore::open_for_embedding(&database_path)?;
+    let old_model = model("all-MiniLM-L6-v2")?;
+    store.set_global_model(&old_model)?;
+    store.ensure_dimension(384)?;
+    let note_passages = store.passages(&notes)?;
+    let archive_passages = store.passages(&archive)?;
+    store.rebuild(
+        &notes,
+        &old_model,
+        timestamp(),
+        &note_passages
+            .iter()
+            .cloned()
+            .map(|p| (p, embedding()))
+            .collect::<Vec<_>>(),
+    )?;
+    store.rebuild(
+        &archive,
+        &old_model,
+        timestamp(),
+        &archive_passages
+            .iter()
+            .cloned()
+            .map(|p| (p, embedding()))
+            .collect::<Vec<_>>(),
+    )?;
+
+    let next_model = model("bge-small-en-v1.5")?;
+    let batches = [
+        PreparedSemanticCollection {
+            collection: notes.clone(),
+            embeddings: note_passages
+                .iter()
+                .cloned()
+                .map(|p| (p, embedding_of_dimension(8)))
+                .collect(),
+        },
+        PreparedSemanticCollection {
+            collection: archive.clone(),
+            embeddings: archive_passages
+                .iter()
+                .cloned()
+                .map(|p| (p, embedding_of_dimension(8)))
+                .collect(),
+        },
+    ];
+
+    store.rebuild_all(&next_model, None, timestamp(), &batches)?;
+
+    assert_eq!(store.global_model()?, Some(next_model.clone()));
+    assert_eq!(
+        store.status(&notes)?.map(|status| status.dimension()),
+        Some(8)
+    );
+    assert_eq!(
+        store.status(&archive)?.map(|status| status.dimension()),
+        Some(8)
+    );
+    assert_eq!(table_dimension(&database_path)?, 8);
+    assert_eq!(vector_count(&database_path, "Notes")?, 1);
+    assert_eq!(vector_count(&database_path, "Archive")?, 1);
+    Ok(())
+}
+
+/// Covers: REQ-022 FR-011 — a vector write failure rolls back model and dimension changes.
+#[test]
+fn rebuild_all_rolls_back_global_model_and_dimension_when_vector_insert_fails()
+-> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let database_path = directory.path().join("collections.db");
+    let notes = name("Notes")?;
+    build(directory.path(), &notes, &[("notes.md", "notes body")])?;
+    let mut store = SqliteSemanticIndexStore::open_for_embedding(&database_path)?;
+    let old_model = model("all-MiniLM-L6-v2")?;
+    store.set_global_model(&old_model)?;
+    store.ensure_dimension(384)?;
+    let passages = store.passages(&notes)?;
+    let old_batch = passages
+        .iter()
+        .cloned()
+        .map(|p| (p, embedding()))
+        .collect::<Vec<_>>();
+    store.rebuild(&notes, &old_model, timestamp(), &old_batch)?;
+    let before_status = store.status(&notes)?;
+    let connection = Connection::open(&database_path)?;
+    connection.execute_batch(
+        "CREATE TRIGGER reject_state_update BEFORE UPDATE ON semantic_index_state
+         BEGIN SELECT RAISE(ABORT, 'injected semantic-state failure'); END;",
+    )?;
+    let next_model = model("bge-small-en-v1.5")?;
+    let batch = PreparedSemanticCollection {
+        collection: notes.clone(),
+        embeddings: passages
+            .iter()
+            .cloned()
+            .map(|p| (p, embedding_of_dimension(8)))
+            .collect(),
+    };
+
+    assert!(
+        store
+            .rebuild_all(&next_model, None, timestamp(), &[batch])
+            .is_err()
+    );
+
+    assert_eq!(store.global_model()?, Some(old_model));
+    assert_eq!(store.status(&notes)?, before_status);
+    assert_eq!(table_dimension(&database_path)?, 384);
+    assert_eq!(vector_count(&database_path, "Notes")?, 1);
+    Ok(())
+}
+
+/// Covers: REQ-022 FR-003 — a successful update removes vectors for a disabled collection.
+#[test]
+fn file_reconcile_removes_semantic_vectors_after_policy_is_disabled() -> Result<(), Box<dyn Error>>
+{
+    let directory = tempdir()?;
+    let database_path = directory.path().join("collections.db");
+    let notes = name("Notes")?;
+    build(directory.path(), &notes, &[("notes.md", "notes body")])?;
+    let mut semantic = SqliteSemanticIndexStore::open_for_embedding(&database_path)?;
+    let embedding_model = model("all-MiniLM-L6-v2")?;
+    semantic.set_global_model(&embedding_model)?;
+    semantic.ensure_dimension(384)?;
+    let passages = semantic.passages(&notes)?;
+    let vectors = passages
+        .into_iter()
+        .map(|passage| (passage, embedding()))
+        .collect::<Vec<_>>();
+    semantic.rebuild(&notes, &embedding_model, timestamp(), &vectors)?;
+    semantic.set_semantic_enabled(&notes, false)?;
+    assert_eq!(vector_count(&database_path, "Notes")?, 1);
+
+    let mut files = SqliteFileStore::open_for_ingestion(&database_path)?;
+    files.reconcile(&notes, &[], &[], timestamp())?;
+    let semantic = SqliteSemanticIndexStore::open_for_embedding(&database_path)?;
+
+    assert!(!semantic.semantic_enabled(&notes)?);
+    assert!(semantic.status(&notes)?.is_none());
+    assert_eq!(vector_count(&database_path, "Notes")?, 0);
+    Ok(())
+}
+
+/// Covers: REQ-022 FR-004 — file, lexical, graph, vector, and semantic state commit together.
+#[test]
+fn reconcile_collection_commits_enabled_semantic_index_with_file_changes()
+-> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let database_path = directory.path().join("collections.db");
+    let notes = name("Notes")?;
+    let file_path = directory.path().join("notes.md");
+    build(directory.path(), &notes, &[("notes.md", "old passage")])?;
+    let mut semantic = SqliteSemanticIndexStore::open_for_embedding(&database_path)?;
+    let embedding_model = model("all-MiniLM-L6-v2")?;
+    semantic.set_global_model(&embedding_model)?;
+    semantic.ensure_dimension(384)?;
+    let old_passages = semantic.passages(&notes)?;
+    semantic.rebuild(
+        &notes,
+        &embedding_model,
+        timestamp(),
+        &old_passages
+            .iter()
+            .cloned()
+            .map(|p| (p, embedding()))
+            .collect::<Vec<_>>(),
+    )?;
+    semantic.set_semantic_enabled(&notes, true)?;
+    let update = CollectionIndexUpdate {
+        collection: notes.clone(),
+        upsert: vec![FileRecord::new(file_path.clone(), b"new passage".to_vec())],
+        delete: Vec::new(),
+        semantic: vec![PreparedSemanticPassage::new(
+            file_path.clone(),
+            PassageKind::Body,
+            0,
+            embedding(),
+        )],
+        model: embedding_model,
+    };
+
+    semantic.reconcile_collection(&update, Timestamp::from_unix_seconds(1_700_000_001))?;
+    let retrieval = SqliteFileRetrievalStore::open(&database_path)?;
+    let file = retrieval
+        .get_by_path(&notes, &file_path)?
+        .ok_or("reconciled file should be stored")?;
+    let refreshed = SqliteSemanticIndexStore::open_for_embedding(&database_path)?;
+    let passages = refreshed.passages(&notes)?;
+
+    assert_eq!(file.content(), b"new passage");
+    assert_eq!(passages.len(), 1);
+    assert_eq!(
+        passages.first().map(SemanticPassage::text),
+        Some("new passage")
+    );
+    assert_eq!(vector_count(&database_path, "Notes")?, 1);
+    assert_eq!(
+        refreshed
+            .status(&notes)?
+            .map(|status| status.passage_count()),
+        Some(1)
+    );
+    Ok(())
+}
+
+/// Covers: REQ-022 FR-004 — semantic-state failure rolls back files and all collection indexes.
+#[test]
+fn reconcile_collection_rolls_back_file_lexical_graph_and_vectors_on_semantic_failure()
+-> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let database_path = directory.path().join("collections.db");
+    let notes = name("Notes")?;
+    let file_path = directory.path().join("notes.md");
+    build(directory.path(), &notes, &[("notes.md", "old passage")])?;
+    let mut semantic = SqliteSemanticIndexStore::open_for_embedding(&database_path)?;
+    let embedding_model = model("all-MiniLM-L6-v2")?;
+    semantic.set_global_model(&embedding_model)?;
+    semantic.ensure_dimension(384)?;
+    let old_passages = semantic.passages(&notes)?;
+    semantic.rebuild(
+        &notes,
+        &embedding_model,
+        timestamp(),
+        &old_passages
+            .iter()
+            .cloned()
+            .map(|p| (p, embedding()))
+            .collect::<Vec<_>>(),
+    )?;
+    semantic.set_semantic_enabled(&notes, true)?;
+    let before_status = semantic.status(&notes)?;
+    let connection = Connection::open(&database_path)?;
+    connection.execute_batch(
+        "CREATE TRIGGER reject_semantic_state BEFORE UPDATE ON semantic_index_state
+         BEGIN SELECT RAISE(ABORT, 'injected state failure'); END;",
+    )?;
+    let update = CollectionIndexUpdate {
+        collection: notes.clone(),
+        upsert: vec![FileRecord::new(file_path.clone(), b"new passage".to_vec())],
+        delete: Vec::new(),
+        semantic: vec![PreparedSemanticPassage::new(
+            file_path.clone(),
+            PassageKind::Body,
+            0,
+            embedding(),
+        )],
+        model: embedding_model,
+    };
+
+    assert!(
+        semantic
+            .reconcile_collection(&update, Timestamp::from_unix_seconds(1_700_000_001))
+            .is_err()
+    );
+
+    let retrieval = SqliteFileRetrievalStore::open(&database_path)?;
+    let file = retrieval
+        .get_by_path(&notes, &file_path)?
+        .ok_or("old file should remain")?;
+    let semantic = SqliteSemanticIndexStore::open_for_embedding(&database_path)?;
+    assert_eq!(file.content(), b"old passage");
+    assert_eq!(semantic.passages(&notes)?, old_passages);
+    assert_eq!(semantic.status(&notes)?, before_status);
+    assert_eq!(vector_count(&database_path, "Notes")?, 1);
     Ok(())
 }
 

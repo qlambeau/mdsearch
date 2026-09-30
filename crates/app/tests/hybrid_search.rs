@@ -6,7 +6,10 @@ use std::path::Path;
 
 use tempfile::tempdir;
 
-use kv_app::run;
+mod common;
+#[path = "common/ingestion.rs"]
+mod ingestion;
+use common::run;
 use kv_application::SemanticIndexStore;
 use kv_domain::{CollectionName, Embedding, EmbeddingModel, SemanticPassage, Timestamp};
 use kv_store_sqlite::SqliteSemanticIndexStore;
@@ -17,7 +20,16 @@ fn path_argument(path: &Path) -> Result<&str, std::io::Error> {
 }
 
 fn create(home: &Path, collection: &str) -> Result<(), Box<dyn Error>> {
-    run(["mdsearch", "collection", "create", collection], home)?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "create",
+            collection,
+            home.to_str().ok_or("UTF-8 fixture path required")?,
+        ],
+        home,
+    )?;
     Ok(())
 }
 
@@ -28,26 +40,19 @@ fn add_and_update(
     content: &str,
 ) -> Result<(), Box<dyn Error>> {
     fs::write(file, content)?;
+    ingestion::ingest(home, collection, &[path_argument(file)?], false, None)?;
     run(
         [
             "mdsearch",
             "collection",
-            "add",
+            "configure",
             collection,
-            path_argument(file)?,
+            "--sources",
+            path_argument(file.parent().ok_or("source file has no parent")?)?,
         ],
         home,
     )?;
-    run(
-        [
-            "mdsearch",
-            "collection",
-            "update",
-            collection,
-            path_argument(file)?,
-        ],
-        home,
-    )?;
+    run(["mdsearch", "update", "--collection", collection], home)?;
     Ok(())
 }
 
@@ -77,7 +82,7 @@ fn embed_with_dimension(home: &Path, dimension: usize) -> Result<(), Box<dyn Err
 fn hybrid_fails_on_an_empty_query() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
 
-    let error = run(["mdsearch", "hybrid", ""], home.path())
+    let error = run(["mdsearch", "search", "", "--mode", "hybrid"], home.path())
         .err()
         .ok_or_else(|| std::io::Error::other("an empty query should fail"))?;
 
@@ -100,7 +105,10 @@ fn hybrid_matches_operator_characters_literally() -> Result<(), Box<dyn Error>> 
     add_and_update(home.path(), "Notes", &a, "a AND b semantics")?;
     add_and_update(home.path(), "Notes", &b, "borrowing only")?;
 
-    let output = run(["mdsearch", "hybrid", "a AND"], home.path())?;
+    let output = run(
+        ["mdsearch", "search", "a AND", "--mode", "hybrid"],
+        home.path(),
+    )?;
 
     assert!(
         output.contains("a AND b semantics"),
@@ -126,7 +134,10 @@ fn search_and_hybrid_return_the_same_passages_for_the_same_query() -> Result<(),
     add_and_update(home.path(), "Notes", &b, "borrowing only")?;
 
     let search = run(["mdsearch", "search", "a AND"], home.path())?;
-    let hybrid = run(["mdsearch", "hybrid", "a AND"], home.path())?;
+    let hybrid = run(
+        ["mdsearch", "search", "a AND", "--mode", "hybrid"],
+        home.path(),
+    )?;
 
     for output in [&search, &hybrid] {
         assert!(
@@ -157,9 +168,12 @@ fn hybrid_reports_a_dimension_mismatch() -> Result<(), Box<dyn Error>> {
     store.ensure_dimension(1024)?;
     drop(store);
 
-    let error = run(["mdsearch", "hybrid", "borrowing"], home.path())
-        .err()
-        .ok_or_else(|| std::io::Error::other("a dimension mismatch should fail"))?;
+    let error = run(
+        ["mdsearch", "search", "borrowing", "--mode", "hybrid"],
+        home.path(),
+    )
+    .err()
+    .ok_or_else(|| std::io::Error::other("a dimension mismatch should fail"))?;
 
     assert!(
         error.to_string().contains("dimension mismatch"),
@@ -179,10 +193,12 @@ fn hybrid_reports_a_missing_database_without_creating_it() -> Result<(), Box<dyn
     let error = run(
         [
             "mdsearch",
-            "hybrid",
+            "search",
             "borrowing",
             "--database",
             database_argument,
+            "--mode",
+            "hybrid",
         ],
         home.path(),
     )
@@ -204,7 +220,15 @@ fn hybrid_reports_a_missing_collection() -> Result<(), Box<dyn Error>> {
     add_and_update(home.path(), "Notes", &a, "borrowing")?;
 
     let error = run(
-        ["mdsearch", "hybrid", "borrowing", "--collection", "Journal"],
+        [
+            "mdsearch",
+            "search",
+            "borrowing",
+            "--collection",
+            "Journal",
+            "--mode",
+            "hybrid",
+        ],
         home.path(),
     )
     .err()
@@ -222,19 +246,18 @@ fn hybrid_reports_an_unbuilt_index() -> Result<(), Box<dyn Error>> {
     let file = home.path().join("a.md");
     fs::write(&file, "borrowing")?;
     create(home.path(), "Notes")?;
-    run(
-        [
-            "mdsearch",
-            "collection",
-            "add",
-            "Notes",
-            path_argument(&file)?,
-        ],
-        home.path(),
-    )?;
+    ingestion::ingest(home.path(), "Notes", &[path_argument(&file)?], false, None)?;
 
     let error = run(
-        ["mdsearch", "hybrid", "borrowing", "--collection", "Notes"],
+        [
+            "mdsearch",
+            "search",
+            "borrowing",
+            "--collection",
+            "Notes",
+            "--mode",
+            "hybrid",
+        ],
         home.path(),
     )
     .err()
@@ -251,7 +274,15 @@ fn hybrid_rejects_an_out_of_range_limit() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
 
     let error = run(
-        ["mdsearch", "hybrid", "borrowing", "--limit", "200"],
+        [
+            "mdsearch",
+            "search",
+            "borrowing",
+            "--limit",
+            "200",
+            "--mode",
+            "hybrid",
+        ],
         home.path(),
     )
     .err()
@@ -272,12 +303,12 @@ fn hybrid_skips_unbuilt_collections_when_searching_all() -> Result<(), Box<dyn E
     add_and_update(home.path(), "Notes", &a, "borrowing")?;
     fs::write(&d, "borrowing")?;
     create(home.path(), "Draft")?;
-    run(
-        ["mdsearch", "collection", "add", "Draft", path_argument(&d)?],
+    ingestion::ingest(home.path(), "Draft", &[path_argument(&d)?], false, None)?;
+
+    let output = run(
+        ["mdsearch", "search", "borrowing", "--mode", "hybrid"],
         home.path(),
     )?;
-
-    let output = run(["mdsearch", "hybrid", "borrowing"], home.path())?;
 
     assert!(output.contains("borrowing"));
     assert!(
@@ -296,9 +327,12 @@ fn hybrid_produces_empty_output_when_nothing_matches() -> Result<(), Box<dyn Err
     create(home.path(), "Notes")?;
     add_and_update(home.path(), "Notes", &a, "borrowing")?;
 
-    let output = run(["mdsearch", "hybrid", "zzznotaword"], home.path())?;
+    let output = run(
+        ["mdsearch", "search", "zzznotaword", "--mode", "hybrid"],
+        home.path(),
+    )?;
 
-    assert_eq!(output, "");
+    assert_eq!(output, "no matches");
     Ok(())
 }
 
@@ -310,7 +344,17 @@ fn hybrid_json_emits_a_structured_object() -> Result<(), Box<dyn Error>> {
     create(home.path(), "Notes")?;
     add_and_update(home.path(), "Notes", &a, "borrowing rules")?;
 
-    let output = run(["mdsearch", "hybrid", "borrowing", "--json"], home.path())?;
+    let output = run(
+        [
+            "mdsearch",
+            "search",
+            "borrowing",
+            "--json",
+            "--mode",
+            "hybrid",
+        ],
+        home.path(),
+    )?;
 
     let value: serde_json::Value = serde_json::from_str(&output)?;
     assert_eq!(
@@ -396,11 +440,13 @@ fn hybrid_human_reports_the_shown_count() -> Result<(), Box<dyn Error>> {
     let output = run(
         [
             "mdsearch",
-            "hybrid",
+            "search",
             "borrowing",
             "--no-rerank",
             "--limit",
             "2",
+            "--mode",
+            "hybrid",
         ],
         home.path(),
     )?;
@@ -426,7 +472,10 @@ fn hybrid_warns_when_the_reranker_is_uncached() -> Result<(), Box<dyn Error>> {
     create(home.path(), "Notes")?;
     add_and_update(home.path(), "Notes", &a, "borrowing rules")?;
 
-    let output = run(["mdsearch", "hybrid", "borrowing"], home.path())?;
+    let output = run(
+        ["mdsearch", "search", "borrowing", "--mode", "hybrid"],
+        home.path(),
+    )?;
 
     assert!(output.contains("borrowing rules"));
     assert!(
@@ -446,7 +495,14 @@ fn hybrid_no_rerank_suppresses_the_warning() -> Result<(), Box<dyn Error>> {
     add_and_update(home.path(), "Notes", &a, "borrowing rules")?;
 
     let output = run(
-        ["mdsearch", "hybrid", "borrowing", "--no-rerank"],
+        [
+            "mdsearch",
+            "search",
+            "borrowing",
+            "--no-rerank",
+            "--mode",
+            "hybrid",
+        ],
         home.path(),
     )?;
 
@@ -468,7 +524,16 @@ fn hybrid_json_honors_limit() -> Result<(), Box<dyn Error>> {
     add_and_update(home.path(), "Notes", &a, "borrowing rules")?;
 
     let output = run(
-        ["mdsearch", "hybrid", "borrowing", "--json", "--limit", "1"],
+        [
+            "mdsearch",
+            "search",
+            "borrowing",
+            "--json",
+            "--limit",
+            "1",
+            "--mode",
+            "hybrid",
+        ],
         home.path(),
     )?;
 

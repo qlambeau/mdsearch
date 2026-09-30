@@ -6,7 +6,10 @@ use std::path::Path;
 
 use tempfile::tempdir;
 
-use kv_app::run;
+mod common;
+#[path = "common/ingestion.rs"]
+mod ingestion;
+use common::run;
 use kv_application::SemanticIndexStore;
 use kv_domain::{CollectionName, Embedding, EmbeddingModel, SemanticPassage, Timestamp};
 use kv_store_sqlite::SqliteSemanticIndexStore;
@@ -18,13 +21,24 @@ fn path_argument(path: &Path) -> Result<&str, std::io::Error> {
 
 fn create_and_add(home: &Path, file: &Path, content: &str) -> Result<(), Box<dyn Error>> {
     fs::write(file, content)?;
-    run(["mdsearch", "collection", "create", "Notes"], home)?;
     run(
         [
             "mdsearch",
             "collection",
-            "add",
+            "create",
             "Notes",
+            home.to_str().ok_or("UTF-8 fixture path required")?,
+        ],
+        home,
+    )?;
+    ingestion::ingest(home, "Notes", &[path_argument(file)?], false, None)?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "configure",
+            "Notes",
+            "--sources",
             path_argument(file)?,
         ],
         home,
@@ -60,9 +74,12 @@ fn adding_files_alone_does_not_build_the_index() -> Result<(), Box<dyn Error>> {
     let file = home.path().join("a.md");
     create_and_add(home.path(), &file, "alpha")?;
 
-    let output = run(["mdsearch", "index", "status"], home.path())?;
+    let output = run(["mdsearch", "status"], home.path())?;
 
-    assert_eq!(output, "collection \"Notes\": lexical index not built");
+    assert_eq!(
+        output,
+        "models: embedding all-MiniLM-L6-v2, re-ranker bge-reranker-base\ncollection \"Notes\": lexical index not built; lexical: not_built (freshness none, built at none); graph: not_built (freshness none, built at none); semantic: disabled (freshness none, built at none)"
+    );
 
     Ok(())
 }
@@ -78,18 +95,9 @@ fn update_builds_the_index_and_counts_passages() -> Result<(), Box<dyn Error>> {
         "---\ntitle: My Title\ntags: [rust]\n---\n\none\n\ntwo\n\nthree",
     )?;
 
-    run(
-        [
-            "mdsearch",
-            "collection",
-            "update",
-            "Notes",
-            path_argument(&file)?,
-        ],
-        home.path(),
-    )?;
+    run(["mdsearch", "update", "--collection", "Notes"], home.path())?;
 
-    let output = run(["mdsearch", "index", "status"], home.path())?;
+    let output = run(["mdsearch", "status"], home.path())?;
 
     assert!(
         output.contains(
@@ -112,18 +120,9 @@ fn every_recognized_frontmatter_field_is_its_own_passage() -> Result<(), Box<dyn
         "---\ntitle: T\ntags: [a]\naliases: [b]\nsummary: S\n---\n\none\n\ntwo",
     )?;
 
-    run(
-        [
-            "mdsearch",
-            "collection",
-            "update",
-            "Notes",
-            path_argument(&file)?,
-        ],
-        home.path(),
-    )?;
+    run(["mdsearch", "update", "--collection", "Notes"], home.path())?;
 
-    let output = run(["mdsearch", "index", "status"], home.path())?;
+    let output = run(["mdsearch", "status"], home.path())?;
 
     assert!(
         output.contains("lexical index built, 1 file(s), 6 passage(s)"),
@@ -139,36 +138,18 @@ fn update_refreshes_the_index_after_an_edit() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
     let file = home.path().join("a.md");
     create_and_add(home.path(), &file, "one\n\ntwo")?;
-    run(
-        [
-            "mdsearch",
-            "collection",
-            "update",
-            "Notes",
-            path_argument(&file)?,
-        ],
-        home.path(),
-    )?;
+    run(["mdsearch", "update", "--collection", "Notes"], home.path())?;
 
-    let first = run(["mdsearch", "index", "status"], home.path())?;
+    let first = run(["mdsearch", "status"], home.path())?;
     assert!(
         first.contains("lexical index built, 1 file(s), 2 passage(s)"),
         "unexpected status: {first}"
     );
 
     fs::write(&file, "one\n\ntwo\n\nthree")?;
-    run(
-        [
-            "mdsearch",
-            "collection",
-            "update",
-            "Notes",
-            path_argument(&file)?,
-        ],
-        home.path(),
-    )?;
+    run(["mdsearch", "update", "--collection", "Notes"], home.path())?;
 
-    let second = run(["mdsearch", "index", "status"], home.path())?;
+    let second = run(["mdsearch", "status"], home.path())?;
     assert!(
         second.contains("lexical index built, 1 file(s), 3 passage(s)"),
         "unexpected status: {second}"
@@ -185,49 +166,46 @@ fn update_removes_passages_of_a_deleted_file() -> Result<(), Box<dyn Error>> {
     let b = home.path().join("b.md");
     fs::write(&a, "alpha")?;
     fs::write(&b, "beta\n\ngamma")?;
-    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
     run(
         [
             "mdsearch",
             "collection",
-            "add",
+            "create",
             "Notes",
-            path_argument(&a)?,
-            path_argument(&b)?,
+            home.path().to_str().ok_or("UTF-8 fixture path required")?,
         ],
         home.path(),
+    )?;
+    ingestion::ingest(
+        home.path(),
+        "Notes",
+        &[path_argument(&a)?, path_argument(&b)?],
+        false,
+        None,
     )?;
     run(
         [
             "mdsearch",
             "collection",
-            "update",
+            "configure",
             "Notes",
+            "--sources",
             path_argument(&a)?,
             path_argument(&b)?,
         ],
         home.path(),
     )?;
-
-    let before = run(["mdsearch", "index", "status"], home.path())?;
+    run(["mdsearch", "update", "--collection", "Notes"], home.path())?;
+    let before = run(["mdsearch", "status"], home.path())?;
     assert!(
         before.contains("lexical index built, 2 file(s), 3 passage(s)"),
         "unexpected status: {before}"
     );
 
     fs::remove_file(&b)?;
-    run(
-        [
-            "mdsearch",
-            "collection",
-            "update",
-            "Notes",
-            path_argument(&a)?,
-        ],
-        home.path(),
-    )?;
+    run(["mdsearch", "update", "--collection", "Notes"], home.path())?;
 
-    let after = run(["mdsearch", "index", "status"], home.path())?;
+    let after = run(["mdsearch", "status"], home.path())?;
     assert!(
         after.contains("lexical index built, 1 file(s), 1 passage(s)"),
         "unexpected status: {after}"
@@ -247,23 +225,14 @@ fn malformed_frontmatter_is_indexed_body_only_and_reported() -> Result<(), Box<d
         "---\ntitle: \"unterminated\n: bad: : :\n---\n\nbody",
     )?;
 
-    let update_output = run(
-        [
-            "mdsearch",
-            "collection",
-            "update",
-            "Notes",
-            path_argument(&file)?,
-        ],
-        home.path(),
-    )?;
+    let update_output = run(["mdsearch", "update", "--collection", "Notes"], home.path())?;
 
     assert!(
         update_output.contains("1 malformed frontmatter"),
         "unexpected update output: {update_output}"
     );
 
-    let status_output = run(["mdsearch", "index", "status"], home.path())?;
+    let status_output = run(["mdsearch", "status"], home.path())?;
     assert!(
         status_output.contains("lexical index built, 1 file(s), 1 passage(s)"),
         "unexpected status: {status_output}"
@@ -278,18 +247,9 @@ fn files_without_frontmatter_are_indexed_by_their_body() -> Result<(), Box<dyn E
     let home = tempdir()?;
     let file = home.path().join("d.md");
     create_and_add(home.path(), &file, "one\n\ntwo")?;
-    run(
-        [
-            "mdsearch",
-            "collection",
-            "update",
-            "Notes",
-            path_argument(&file)?,
-        ],
-        home.path(),
-    )?;
+    run(["mdsearch", "update", "--collection", "Notes"], home.path())?;
 
-    let output = run(["mdsearch", "index", "status"], home.path())?;
+    let output = run(["mdsearch", "status"], home.path())?;
 
     assert!(
         output.contains("lexical index built, 1 file(s), 2 passage(s)"),
@@ -305,18 +265,9 @@ fn empty_files_contribute_no_passages() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
     let file = home.path().join("e.md");
     create_and_add(home.path(), &file, "")?;
-    run(
-        [
-            "mdsearch",
-            "collection",
-            "update",
-            "Notes",
-            path_argument(&file)?,
-        ],
-        home.path(),
-    )?;
+    run(["mdsearch", "update", "--collection", "Notes"], home.path())?;
 
-    let output = run(["mdsearch", "index", "status"], home.path())?;
+    let output = run(["mdsearch", "status"], home.path())?;
 
     assert!(
         output.contains("lexical index built, 1 file(s), 0 passage(s)"),
@@ -334,28 +285,59 @@ fn update_all_rebuilds_the_index_for_every_collection() -> Result<(), Box<dyn Er
     let b = home.path().join("b.md");
     fs::write(&a, "alpha")?;
     fs::write(&b, "beta")?;
-    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
-    run(["mdsearch", "collection", "create", "Archive"], home.path())?;
     run(
-        ["mdsearch", "collection", "add", "Notes", path_argument(&a)?],
+        [
+            "mdsearch",
+            "collection",
+            "create",
+            "Notes",
+            home.path().to_str().ok_or("UTF-8 fixture path required")?,
+        ],
         home.path(),
     )?;
     run(
         [
             "mdsearch",
             "collection",
-            "add",
+            "create",
             "Archive",
+            home.path().to_str().ok_or("UTF-8 fixture path required")?,
+        ],
+        home.path(),
+    )?;
+    ingestion::ingest(home.path(), "Notes", &[path_argument(&a)?], false, None)?;
+    ingestion::ingest(home.path(), "Archive", &[path_argument(&b)?], false, None)?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "configure",
+            "Notes",
+            "--sources",
+            path_argument(&a)?,
+        ],
+        home.path(),
+    )?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "configure",
+            "Archive",
+            "--sources",
             path_argument(&b)?,
         ],
         home.path(),
     )?;
 
-    run(["mdsearch", "collection", "update", "--all"], home.path())?;
+    run(["mdsearch", "update", "--all"], home.path())?;
 
-    let output = run(["mdsearch", "index", "status"], home.path())?;
+    let output = run(["mdsearch", "status"], home.path())?;
 
-    let lines = output.lines().collect::<Vec<_>>();
+    let lines = output
+        .lines()
+        .filter(|line| line.starts_with("collection "))
+        .collect::<Vec<_>>();
     assert_eq!(lines.len(), 2);
     assert!(
         lines
@@ -380,19 +362,10 @@ fn index_status_reports_the_semantic_model_and_dimension() -> Result<(), Box<dyn
     let home = tempdir()?;
     let file = home.path().join("a.md");
     create_and_add(home.path(), &file, "one\n\ntwo")?;
-    run(
-        [
-            "mdsearch",
-            "collection",
-            "update",
-            "Notes",
-            path_argument(&file)?,
-        ],
-        home.path(),
-    )?;
+    run(["mdsearch", "update", "--collection", "Notes"], home.path())?;
     embed_with_dimension(home.path(), 1024)?;
 
-    let output = run(["mdsearch", "index", "status"], home.path())?;
+    let output = run(["mdsearch", "status"], home.path())?;
 
     assert!(
         output.contains("bge-large-en-v1.5 (1024 dimensions)"),
@@ -409,18 +382,9 @@ fn index_status_reports_no_semantic_line_without_a_semantic_state() -> Result<()
     let home = tempdir()?;
     let file = home.path().join("a.md");
     create_and_add(home.path(), &file, "one")?;
-    run(
-        [
-            "mdsearch",
-            "collection",
-            "update",
-            "Notes",
-            path_argument(&file)?,
-        ],
-        home.path(),
-    )?;
+    run(["mdsearch", "update", "--collection", "Notes"], home.path())?;
 
-    let output = run(["mdsearch", "index", "status"], home.path())?;
+    let output = run(["mdsearch", "status"], home.path())?;
 
     assert!(
         !output.contains("dimensions"),
@@ -442,13 +406,7 @@ fn index_status_reports_a_missing_database_without_creating_it() -> Result<(), B
     let database_argument = path_argument(&database_path)?;
 
     let error = run(
-        [
-            "mdsearch",
-            "index",
-            "status",
-            "--database",
-            database_argument,
-        ],
+        ["mdsearch", "status", "--database", database_argument],
         home.path(),
     )
     .err()
@@ -467,9 +425,12 @@ fn index_status_reports_empty_output_for_no_collections() -> Result<(), Box<dyn 
     let database_path = home.path().join(".mdsearch").join("collections.db");
     kv_store_sqlite::SqliteCollectionStore::open(&database_path)?;
 
-    let output = run(["mdsearch", "index", "status"], home.path())?;
+    let output = run(["mdsearch", "status"], home.path())?;
 
-    assert_eq!(output, "");
+    assert_eq!(
+        output,
+        "models: embedding all-MiniLM-L6-v2, re-ranker bge-reranker-base"
+    );
 
     Ok(())
 }

@@ -3,28 +3,26 @@
 //! Binary entry point for the `mdsearch` CLI.
 
 use std::io::{self, Write};
-use std::path::PathBuf;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    let Some(home_directory) = std::env::var_os("HOME").map(PathBuf::from) else {
-        let mut stderr = io::stderr().lock();
-        if writeln!(stderr, "home directory is unavailable").is_err() {
-            return ExitCode::FAILURE;
-        }
-        return ExitCode::FAILURE;
-    };
-
-    match kv_app::run(std::env::args_os(), &home_directory) {
+    match kv_app::run_from_environment(std::env::args_os()) {
         Ok(output) => {
-            if output.is_empty() {
-                return ExitCode::SUCCESS;
-            }
             let mut stdout = io::stdout().lock();
-            if writeln!(stdout, "{output}").is_err() {
+            if output.write_to(&mut stdout).is_err() {
                 return ExitCode::FAILURE;
             }
             ExitCode::SUCCESS
+        }
+        Err(kv_app::AppError::Arguments(error)) => {
+            let exit_code = match error.kind() {
+                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion => 0,
+                _ => 2,
+            };
+            if error.print().is_err() {
+                return ExitCode::FAILURE;
+            }
+            ExitCode::from(exit_code)
         }
         Err(error) => {
             let mut stderr = io::stderr().lock();

@@ -4,16 +4,19 @@
 //! Pure domain types and rules for `mdsearch`.
 
 mod collection;
+mod collection_source;
 mod content_hash;
 mod embedding;
 mod file_id;
 mod fusion;
 mod graph;
+mod index_readiness;
 mod passage;
 mod reranking;
 mod timestamp;
 
 pub use collection::{CollectionName, CollectionNameError};
+pub use collection_source::{CollectionSource, SourceKind};
 pub use content_hash::{ContentHash, ContentHashError};
 pub use embedding::{
     Embedding, EmbeddingModel, EmbeddingModelError, SemanticIndexStatus, SemanticPassage,
@@ -27,3 +30,5 @@ pub use graph::{
 pub use passage::{FrontmatterIssue, Passage, PassageKind, segment_passages};
 pub use reranking::{RerankerModel, RerankerModelError};
 pub use timestamp::Timestamp;
+
+pub use index_readiness::{IndexEnablement, IndexFreshness, IndexReadiness};
