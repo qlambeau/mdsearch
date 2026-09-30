@@ -6,7 +6,8 @@ use std::path::Path;
 
 use tempfile::tempdir;
 
-use kv_app::run;
+mod common;
+use common::run;
 
 fn path_argument(path: &Path) -> Result<&str, std::io::Error> {
     path.to_str()
@@ -34,16 +35,7 @@ fn store_and_update(
         ],
         home,
     )?;
-    run(
-        [
-            "mdsearch",
-            "collection",
-            "update",
-            "--collection",
-            collection,
-        ],
-        home,
-    )?;
+    run(["mdsearch", "update", "--collection", collection], home)?;
     Ok(())
 }
 
@@ -62,11 +54,18 @@ fn context_returns_neighbors_as_json() -> Result<(), Box<dyn Error>> {
 
     let a = home.path().join("vault").join("a.md");
     let query = format!(
-        r#"{{ neighbors(collection: "Notes", kind: "file", key: "{}", maxHops: 2) {{ key relation depth }} }}"#,
+        r#"{{ neighbors(kind: "file", key: "{}", maxHops: 2) {{ key relation depth }} }}"#,
         a.to_string_lossy()
     );
     let output = run(
-        ["mdsearch", "context", &query, "--collection", "Notes"],
+        [
+            "mdsearch",
+            "graph",
+            "query",
+            &query,
+            "--collection",
+            "Notes",
+        ],
         home.path(),
     )?;
 
@@ -92,11 +91,18 @@ fn context_returns_node_lookup() -> Result<(), Box<dyn Error>> {
 
     let a = home.path().join("vault").join("a.md");
     let query = format!(
-        r#"{{ node(collection: "Notes", kind: "file", key: "{}") {{ key title }} }}"#,
+        r#"{{ node(kind: "file", key: "{}") {{ key title }} }}"#,
         a.to_string_lossy()
     );
     let output = run(
-        ["mdsearch", "context", &query, "--collection", "Notes"],
+        [
+            "mdsearch",
+            "graph",
+            "query",
+            &query,
+            "--collection",
+            "Notes",
+        ],
         home.path(),
     )?;
 
@@ -118,8 +124,8 @@ fn context_returns_node_lookup() -> Result<(), Box<dyn Error>> {
 #[test]
 fn context_requires_a_collection() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
-    let query = r#"{ node(collection: "Notes", kind: "file", key: "a.md") { key } }"#;
-    let result = run(["mdsearch", "context", query], home.path());
+    let query = r#"{ node(kind: "file", key: "a.md") { key } }"#;
+    let result = run(["mdsearch", "graph", "query", query], home.path());
     assert!(result.is_err());
     Ok(())
 }
@@ -130,9 +136,9 @@ fn context_reports_unknown_node() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
     store_and_update(home.path(), "Notes", &[("a.md", "---\n---\nbody\n")])?;
 
-    let query = r#"{ node(collection: "Notes", kind: "file", key: "zzz.md") { key } }"#;
+    let query = r#"{ node(kind: "file", key: "zzz.md") { key } }"#;
     let result = run(
-        ["mdsearch", "context", query, "--collection", "Notes"],
+        ["mdsearch", "graph", "query", query, "--collection", "Notes"],
         home.path(),
     );
     assert!(result.is_err());
@@ -150,7 +156,8 @@ fn context_rejects_a_malformed_query() -> Result<(), Box<dyn Error>> {
     let result = run(
         [
             "mdsearch",
-            "context",
+            "graph",
+            "query",
             "not graphql",
             "--collection",
             "Notes",
@@ -166,11 +173,12 @@ fn context_rejects_a_malformed_query() -> Result<(), Box<dyn Error>> {
 fn context_reports_missing_database_without_creating_one() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
     let missing = home.path().join("missing").join("collections.db");
-    let query = r#"{ node(collection: "Notes", kind: "file", key: "a.md") { key } }"#;
+    let query = r#"{ node(kind: "file", key: "a.md") { key } }"#;
     let result = run(
         [
             "mdsearch",
-            "context",
+            "graph",
+            "query",
             query,
             "--collection",
             "Notes",

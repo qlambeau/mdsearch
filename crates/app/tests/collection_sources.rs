@@ -5,7 +5,8 @@ use std::fs;
 
 use tempfile::tempdir;
 
-use kv_app::run;
+mod common;
+use common::run;
 
 /// Covers: REQ-021 FR-001, FR-013 — registration is canonical and does not index.
 #[test]
@@ -21,9 +22,12 @@ fn create_registers_canonical_sources_without_indexing_content() -> Result<(), B
         ["mdsearch", "collection", "create", "Notes", source],
         home.path(),
     )?;
-    let error = run(["mdsearch", "get", "Notes", "notes.md"], home.path())
-        .err()
-        .ok_or("source registration must not index content")?;
+    let error = run(
+        ["mdsearch", "get", "notes.md", "--collection", "Notes"],
+        home.path(),
+    )
+    .err()
+    .ok_or("source registration must not index content")?;
 
     assert!(error.to_string().contains("file not found"));
 

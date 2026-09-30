@@ -22,7 +22,7 @@ fn run_without_home(arguments: &[&str]) -> Result<Output, Box<dyn Error>> {
 #[case(&["--help"])]
 #[case(&["--version"])]
 #[case(&["collection", "--help"])]
-#[case(&["collection", "add", "--help"])]
+#[case(&["update", "--help"])]
 #[case(&["graph", "neighbors", "--help"])]
 fn informational_commands_succeed_without_home(
     #[case] arguments: &[&str],
@@ -69,7 +69,7 @@ fn missing_database_is_an_operational_failure() -> Result<(), Box<dyn Error>> {
 /// Covers: REQ-020 FR-003/FR-005 — HOME is required only for default paths.
 #[test]
 fn default_database_reports_missing_home() -> Result<(), Box<dyn Error>> {
-    let output = run_without_home(&["collection", "create", "Notes"])?;
+    let output = run_without_home(&["collection", "create", "Notes", "."])?;
 
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
@@ -80,7 +80,7 @@ fn default_database_reports_missing_home() -> Result<(), Box<dyn Error>> {
 
 /// Covers: REQ-020 FR-004/FR-005 — the global database option selects the database.
 #[rstest]
-#[case(&["--database"], &["collection", "create", "Notes"])]
+#[case(&["--database"], &["collection", "create", "Notes", "."])]
 #[case(&["collection", "--database"], &["create", "Notes"])]
 #[case(&["collection", "create", "Notes", "--database"], &[])]
 fn global_database_option_selects_explicit_path(
@@ -97,6 +97,10 @@ fn global_database_option_selects_explicit_path(
         .copied()
         .chain([database])
         .chain(suffix.iter().copied())
+        .chain([directory
+            .path()
+            .to_str()
+            .ok_or("UTF-8 source path required")?])
         .collect::<Vec<_>>();
     let output = run_without_home(&arguments)?;
 

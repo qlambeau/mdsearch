@@ -56,8 +56,11 @@ fn result(
     score: f64,
 ) -> Result<SearchResult, Box<dyn Error>> {
     Ok(SearchResult::new(
-        collection("Notes")?,
-        PathBuf::from(path),
+        kv_application::SearchFile::new(
+            kv_domain::FileId::try_new(1)?,
+            collection("Notes")?,
+            PathBuf::from(path),
+        ),
         kind,
         text.to_owned(),
         score,

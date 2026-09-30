@@ -2,9 +2,9 @@
 id: TASK-011
 title: "Hybrid search with lexical-semantic fusion and cross-encoder re-ranking implementation tasks"
 type: implementation-tasks
-status: approved
+status: implemented
 created: 2026-08-18
-updated: 2026-08-18
+updated: 2026-09-30
 owner: Quentin
 parent: US-011
 related:
@@ -145,28 +145,28 @@ re-ranker model (deferred to the ADR-004 evaluation framework).
 
 ## Test And Verification Plan
 
-- [ ] Unit checks: `RerankerModel` validation, `reciprocal_rank_fusion`
+- [x] Unit checks: `RerankerModel` validation, `reciprocal_rank_fusion`
       determinism and change-detection, tie-breaking, and the free-text-to-FTS5
       mapper (quoting, `AND` joining, operator neutralization).
-- [ ] Application checks: `HybridSearch` with fakes for every scope, staleness,
+- [x] Application checks: `HybridSearch` with fakes for every scope, staleness,
       lexical-only fallback, re-rank on/off, uncached re-ranker warning,
       no-match, and empty-query rejection.
-- [ ] Integration checks: `SqliteHybridSearchStore` lexical-leg retrieval,
+- [x] Integration checks: `SqliteHybridSearchStore` lexical-leg retrieval,
       semantic-leg `knn_match` and distance-to-similarity, stale-fingerprint
       detection, unknown collection, unbuilt lexical index, deterministic
       ordering.
-- [ ] Adapter checks: `FastembedReranker` availability, download gating,
+- [x] Adapter checks: `FastembedReranker` availability, download gating,
       unsupported-model mapping, and score shape.
-- [ ] Embed extension checks: `embed --reranker` validation, gating, and global
+- [x] Embed extension checks: `embed --reranker` validation, gating, and global
       `reranker_model` setting; revised `REQ-010`/`DES-010`.
-- [ ] CLI checks: rendering, scope, `--limit` bounds, `--json` shape,
+- [x] CLI checks: rendering, scope, `--limit` bounds, `--json` shape,
       `--no-rerank`, fallback-and-warn, empty query, empty output, staleness,
       and missing database.
-- [ ] Gherkin scenarios: `scenarios.feature`.
-- [ ] Non-functional checks: offline default operation, no query-time network,
+- [x] Gherkin scenarios: `scenarios.feature`.
+- [x] Non-functional checks: offline default operation, no query-time network,
       read-only search, bounded pool (3 x limit), and no entity-graph behavior.
-- [ ] Constitution checks: `cargo xtask ci` and the Definition of Done gates.
-- [ ] Regression check: confirm no hybrid/reranker behavior leaks into `search`,
+- [x] Constitution checks: `cargo xtask ci` and the Definition of Done gates.
+- [x] Regression check: confirm no hybrid/reranker behavior leaks into `search`,
       `get`, `update`, `add`, or the `embed` vector path beyond the documented
       `--reranker` extension.
 
@@ -193,11 +193,28 @@ it retries safely. A missing database fails without creating a file.
 
 ## Definition Of Done
 
-- [ ] All tasks are complete.
-- [ ] Automated unit, integration, and CLI checks pass.
-- [ ] The executable scenarios pass.
-- [ ] The Rust constitution's tooling gates and Definition of Done checklist pass.
-- [ ] Offline default and read-only constraints are verified.
-- [ ] The `embed --reranker` extension and the revised `REQ-010`/`DES-010` are approved.
-- [ ] No out-of-scope entity-graph, related-concept, search-change, or tuning behavior was added.
-- [ ] Operational or documentation changes are complete.
+- [x] All tasks are complete.
+- [x] Automated unit, integration, and CLI checks pass.
+- [x] The executable scenarios pass.
+- [x] The Rust constitution's tooling gates and Definition of Done checklist pass.
+- [x] Offline default and read-only constraints are verified.
+- [x] The `embed --reranker` extension and the revised `REQ-010`/`DES-010` are approved.
+- [x] No out-of-scope entity-graph, related-concept, search-change, or tuning behavior was added.
+- [x] Operational or documentation changes are complete.
+
+## Observed Verification Evidence (2026-09-30)
+
+Baseline verification before US-023 implementation, base commit `546b923`.
+The existing ordered tasks were already checked complete; this verification
+closes their missing evidence and lifecycle bookkeeping via verify-feature.
+
+- `cargo xtask ci` passed: formatting, warnings-denied clippy, all-feature
+  workspace tests including hybrid application/store/CLI regressions, rustdoc,
+  cargo-deny, coverage, and specification validation. Coverage summary: 86.80% regions; the required line coverage gate (>= 85%) passed.
+- `cargo xtask eval --verify-only` passed: 32 documents, 32 queries, 78 judgments.
+- `cargo xtask eval` passed: Recall@5, MRR@5, NDCG@5 all 1.0000.
+- `git diff --check` passed.
+
+US-014/015/022 supersede earlier query/model details; US-023 will replace
+transitional command names and empty-output expectations while preserving
+ranking, provenance, and the established regression assertions.

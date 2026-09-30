@@ -7,7 +7,8 @@ use std::process::Command;
 use rstest::rstest;
 use tempfile::tempdir;
 
-use kv_app::run;
+mod common;
+use common::run;
 
 /// Covers: REQ-020 FR-006/FR-007 — short switches select the requested search scope and limit.
 #[test]
@@ -107,18 +108,18 @@ fn search_limit_boundaries_are_enforced(
 #[case(&["collection", "--help"])]
 #[case(&["collection", "create", "--help"])]
 #[case(&["collection", "list", "--help"])]
-#[case(&["collection", "destroy", "--help"])]
-#[case(&["collection", "add", "--help"])]
-#[case(&["collection", "update", "--help"])]
-#[case(&["index", "--help"])]
-#[case(&["index", "status", "--help"])]
+#[case(&["collection", "delete", "--help"])]
+#[case(&["collection", "configure", "--help"])]
+#[case(&["update", "--help"])]
+#[case(&["status", "--help"])]
+#[case(&["model", "--help"])]
 #[case(&["search", "--help"])]
 #[case(&["get", "--help"])]
-#[case(&["embed", "--help"])]
-#[case(&["hybrid", "--help"])]
+#[case(&["model", "set", "--help"])]
+#[case(&["model", "list", "--help"])]
 #[case(&["graph", "neighbors", "--help"])]
 #[case(&["graph", "--help"])]
-#[case(&["context", "--help"])]
+#[case(&["graph", "query", "--help"])]
 fn help_describes_command_and_shows_example(
     #[case] arguments: &[&str],
 ) -> Result<(), Box<dyn Error>> {
@@ -138,7 +139,7 @@ fn help_describes_command_and_shows_example(
 
 /// Covers: REQ-020 FR-009 — ingestion accepts `--skip-unreadable`.
 #[rstest]
-#[case("add")]
+#[case("update")]
 fn ingestion_accepts_skip_unreadable(#[case] subcommand: &str) -> Result<(), Box<dyn Error>> {
     let directory = tempdir()?;
     let database_path = directory.path().join("collections.db");
@@ -149,6 +150,10 @@ fn ingestion_accepts_skip_unreadable(#[case] subcommand: &str) -> Result<(), Box
             "collection",
             "create",
             "Notes",
+            directory
+                .path()
+                .to_str()
+                .ok_or("UTF-8 fixture path required")?,
             "--database",
             database,
         ],
@@ -156,15 +161,10 @@ fn ingestion_accepts_skip_unreadable(#[case] subcommand: &str) -> Result<(), Box
     )?;
     let readable = directory.path().join("readable.md");
     std::fs::write(&readable, "rust note")?;
-    let readable = path_argument(&readable)?;
-    let unreadable_path = directory.path().join("missing.md");
-    let unreadable = path_argument(&unreadable_path)?;
     let arguments = [
-        "collection",
         subcommand,
+        "-c",
         "Notes",
-        readable,
-        unreadable,
         "--database",
         database,
         "--skip-unreadable",
@@ -175,7 +175,7 @@ fn ingestion_accepts_skip_unreadable(#[case] subcommand: &str) -> Result<(), Box
         .output()?;
 
     assert_eq!(output.status.code(), Some(0));
-    assert!(String::from_utf8(output.stdout)?.contains("skipped 1"));
+    assert!(String::from_utf8(output.stdout)?.contains("added 1"));
 
     Ok(())
 }
@@ -204,7 +204,6 @@ fn update_accepts_skip_unreadable() -> Result<(), Box<dyn Error>> {
     )?;
     let output = Command::new(env!("CARGO_BIN_EXE_mdsearch"))
         .args([
-            "collection",
             "update",
             "--collection",
             "Notes",
@@ -224,7 +223,7 @@ fn update_accepts_skip_unreadable() -> Result<(), Box<dyn Error>> {
 #[test]
 fn ingestion_rejects_force_spelling() -> Result<(), Box<dyn Error>> {
     let output = Command::new(env!("CARGO_BIN_EXE_mdsearch"))
-        .args(["collection", "add", "Notes", "missing.md", "--force"])
+        .args(["update", "-c", "Notes", "--force"])
         .env_remove("HOME")
         .output()?;
 
@@ -247,6 +246,10 @@ fn explicit_paths_reach_model_check_without_home() -> Result<(), Box<dyn Error>>
             "collection",
             "create",
             "Notes",
+            directory
+                .path()
+                .to_str()
+                .ok_or("UTF-8 fixture path required")?,
             "--semantic",
             "--database",
             database,
@@ -255,7 +258,7 @@ fn explicit_paths_reach_model_check_without_home() -> Result<(), Box<dyn Error>>
     )?;
 
     let output = Command::new(env!("CARGO_BIN_EXE_mdsearch"))
-        .args(["embed", "-c", "Notes", "--database", database])
+        .args(["model", "set", "all-MiniLM-L6-v2", "--database", database])
         .env_remove("HOME")
         .env("HF_HOME", directory.path().join("models"))
         .env_remove("FASTEMBED_CACHE_DIR")
@@ -303,7 +306,15 @@ fn context_collection_filter_accepts_short_switch() -> Result<(), Box<dyn Error>
     let database_path = directory.path().join("missing.db");
     let database = path_argument(&database_path)?;
     let output = Command::new(env!("CARGO_BIN_EXE_mdsearch"))
-        .args(["context", "{}", "-c", "Notes", "--database", database])
+        .args([
+            "graph",
+            "query",
+            "{}",
+            "-c",
+            "Notes",
+            "--database",
+            database,
+        ])
         .env_remove("HOME")
         .output()?;
 
@@ -326,6 +337,10 @@ fn hybrid_accepts_short_collection_and_limit_switches() -> Result<(), Box<dyn Er
             "collection",
             "create",
             "Notes",
+            directory
+                .path()
+                .to_str()
+                .ok_or("UTF-8 fixture path required")?,
             "--database",
             database,
         ],
@@ -334,8 +349,10 @@ fn hybrid_accepts_short_collection_and_limit_switches() -> Result<(), Box<dyn Er
 
     let output = Command::new(env!("CARGO_BIN_EXE_mdsearch"))
         .args([
-            "hybrid",
+            "search",
             "rust",
+            "--mode",
+            "hybrid",
             "-c",
             "Notes",
             "-n",
@@ -376,7 +393,6 @@ fn create_indexed_collection(
     run(
         [
             "mdsearch",
-            "collection",
             "update",
             "--collection",
             collection,
@@ -400,7 +416,7 @@ fn readme_documents_current_diagnostic_and_ingestion_contract() {
     let readme = include_str!("../../../README.md");
 
     assert!(readme.contains("`--skip-unreadable`"));
-    assert!(!readme.contains("`--force`"));
+    assert!(readme.contains("| `--force` | `--skip-unreadable`"));
     assert!(readme.contains("exit 0"));
     assert!(readme.contains("exit 1"));
     assert!(readme.contains("exit 2"));

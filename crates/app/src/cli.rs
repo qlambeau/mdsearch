@@ -26,55 +26,48 @@ pub(crate) struct Cli {
 pub(crate) enum Command {
     #[command(
         subcommand,
-        about = "Create, list, update, and delete collections",
+        about = "Register, configure, list, and delete collections",
         after_help = "Example: mdsearch collection list"
     )]
     Collection(CollectionCommand),
     #[command(
-        subcommand,
-        about = "Inspect built indexes",
-        after_help = "Example: mdsearch index status"
+        about = "Refresh every configured index from registered sources",
+        after_help = "Example: mdsearch update -c Notes --json"
     )]
-    Index(IndexCommand),
+    Update(UpdateCollectionArgs),
     #[command(
-        about = "Search indexed passages lexically",
+        about = "Inspect enabled indexes, stored-content freshness, and models",
+        after_help = "Example: mdsearch status -c Notes --json"
+    )]
+    Status(IndexStatusArgs),
+    #[command(
+        about = "Search indexed passages (default: lexical; hybrid uses local models)",
         after_help = "Example: mdsearch search \"rust ownership\" --collection Notes"
     )]
     Search(SearchArgs),
     #[command(
         about = "Retrieve the full content of a stored file",
-        after_help = "Example: mdsearch get Notes rust.md"
+        after_help = "Example: mdsearch get rust.md -c Notes"
     )]
     Get(GetArgs),
     #[command(
-        about = "Build semantic indexes for collections",
-        after_help = "Example: mdsearch embed --collection Notes --download"
+        subcommand,
+        about = "List or change local semantic models",
+        after_help = "Example: mdsearch model list --json"
     )]
-    Embed(EmbedArgs),
-    #[command(subcommand, about = "List or change local semantic models")]
     Model(ModelCommand),
-    #[command(
-        about = "Search using lexical and semantic indexes",
-        after_help = "Example: mdsearch hybrid \"borrowing rules\" --collection Notes"
-    )]
-    Hybrid(HybridArgs),
     #[command(
         subcommand,
         about = "Inspect entity graph relationships",
         after_help = "Example: mdsearch graph neighbors rust.md --collection Notes"
     )]
     Graph(GraphCommand),
-    #[command(
-        about = "Run a read-only GraphQL query against the entity graph",
-        after_help = "Example: mdsearch context '{ node(kind: \"file\", key: \"rust.md\") { key } }' --collection Notes"
-    )]
-    Context(ContextArgs),
 }
 
 #[derive(Debug, Args)]
 #[command(
     about = "Run a read-only GraphQL query against a collection graph",
-    after_help = "Example: mdsearch context '{ node(kind: \"file\", key: \"rust.md\") { key } }' --collection Notes"
+    after_help = "Example: mdsearch graph query '{ node(kind: \"file\", key: \"rust.md\") { key } }' --collection Notes"
 )]
 pub(crate) struct ContextArgs {
     #[arg(
@@ -100,46 +93,33 @@ pub(crate) enum CollectionCommand {
     )]
     Create(CreateCollectionArgs),
     #[command(
-        about = "List collections and registered sources",
+        about = "List registered sources and enabled indexes",
         after_help = "Example: mdsearch collection list --json"
     )]
     List(ListCollectionsArgs),
     #[command(
-        about = "Replace a collection's registered sources",
+        about = "Replace registered sources and/or change semantic policy without indexing",
         after_help = "Example: mdsearch collection configure Notes --sources ~/vault"
     )]
     Configure(ConfigureCollectionArgs),
     #[command(
         about = "Delete a collection and its stored indexes",
-        after_help = "Example: mdsearch collection destroy Notes"
+        after_help = "Example: mdsearch collection delete Notes"
     )]
-    Destroy(DestroyCollectionArgs),
-    #[command(
-        about = "Store Markdown files without indexing",
-        after_help = "Example: mdsearch collection add Notes ~/vault"
-    )]
-    Add(AddFilesArgs),
-    #[command(
-        about = "Reconcile files and rebuild lexical/graph indexes",
-        after_help = "Example: mdsearch collection update --collection Notes"
-    )]
-    Update(UpdateCollectionArgs),
-}
-
-#[derive(Debug, Subcommand)]
-pub(crate) enum IndexCommand {
-    #[command(
-        about = "Report lexical and semantic index readiness",
-        after_help = "Example: mdsearch index status"
-    )]
-    Status(IndexStatusArgs),
+    Delete(DestroyCollectionArgs),
 }
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum ModelCommand {
-    #[command(about = "List supported models and local availability")]
+    #[command(
+        about = "List supported models and local availability",
+        after_help = "Example: mdsearch model list --json"
+    )]
     List(ModelListArgs),
-    #[command(about = "Change the database-wide embedding or re-ranker model")]
+    #[command(
+        about = "Change database-wide models and atomically rebuild enabled semantic indexes",
+        after_help = "Example: mdsearch model set all-MiniLM-L6-v2 --download"
+    )]
     Set(ModelSetArgs),
 }
 
@@ -150,6 +130,7 @@ pub(crate) struct ModelListArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(group(clap::ArgGroup::new("models").required(true).multiple(true).args(["model", "reranker"])))]
 pub(crate) struct ModelSetArgs {
     #[arg(value_name = "NAME", help = "embedding model name")]
     pub(crate) model: Option<String>,
@@ -166,28 +147,50 @@ pub(crate) enum GraphCommand {
         after_help = "Example: mdsearch graph neighbors rust.md --collection Notes"
     )]
     Neighbors(GraphNeighborsArgs),
+    #[command(
+        about = "Execute GraphQL bound to the selected collection",
+        after_help = "Example: mdsearch graph query '{ node(kind: \"file\", key: \"rust.md\") { key } }' -c Notes"
+    )]
+    Query(ContextArgs),
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct GraphNeighborsArgs {
-    #[arg(value_name = "ID", help = "node key to inspect")]
+    #[arg(value_name = "KEY", help = "exact graph node key to inspect")]
     pub(crate) node: String,
     #[arg(
         short = 'c',
         long,
         value_name = "NAME",
-        help = "restrict graph lookup to this collection"
+        required = true,
+        help = "collection containing the graph"
     )]
-    pub(crate) collection: Option<String>,
+    pub(crate) collection: String,
+    #[arg(long, default_value = "file", value_parser = ["file", "tag", "alias"], help = "node kind (default: file)")]
+    pub(crate) kind: String,
+    #[arg(long, value_parser = ["LINKS_TO", "TAGGED_WITH", "ALIAS_OF", "RELATED_TO", "HAS_SOURCE"], help = "restrict traversed relation kind")]
+    pub(crate) relation: Option<String>,
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=255), help = "maximum traversal depth (1–255, default: 1)")]
+    pub(crate) depth: u8,
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct IndexStatusArgs {}
+pub(crate) struct IndexStatusArgs {
+    #[arg(
+        short = 'c',
+        long,
+        value_name = "NAME",
+        help = "restrict status to one collection"
+    )]
+    pub(crate) collection: Option<String>,
+    #[arg(long, help = "write index status as JSON")]
+    pub(crate) json: bool,
+}
 
 #[derive(Debug, Args)]
 pub(crate) struct SearchArgs {
-    #[arg(value_name = "QUERY", help = "literal search terms")]
-    pub(crate) query: String,
+    #[arg(value_name = "QUERY", required = true, num_args = 1.., help = "literal query words (quoted or separate)")]
+    pub(crate) query: Vec<String>,
     #[arg(
         short = 'c',
         long,
@@ -204,73 +207,47 @@ pub(crate) struct SearchArgs {
     )]
     #[arg(value_parser = clap::value_parser!(u16).range(1..=100))]
     pub(crate) limit: u16,
-    #[arg(long)]
+    #[arg(long, help = "write structured search results as JSON")]
     pub(crate) json: bool,
-    #[arg(long)]
+    #[arg(long, help = "include related files without changing ranking")]
     pub(crate) related: bool,
-}
-
-#[derive(Debug, Args)]
-pub(crate) struct GetArgs {
-    #[arg(value_name = "COLLECTION", help = "collection containing the file")]
-    pub(crate) collection: String,
-    #[arg(value_name = "NAME_OR_ID", help = "stored file name, path, or ID")]
-    pub(crate) name_or_id: String,
-}
-
-#[derive(Debug, Args)]
-pub(crate) struct EmbedArgs {
-    #[arg(
-        short = 'c',
-        long,
-        value_name = "NAME",
-        help = "restrict embedding to this collection (default: all collections)"
-    )]
-    pub(crate) collection: Option<String>,
-    #[arg(long, value_name = "NAME", help = "embedding model name")]
-    pub(crate) model: Option<String>,
-    #[arg(long, value_name = "NAME", help = "re-ranker model name")]
-    pub(crate) reranker: Option<String>,
-    #[arg(
-        long,
-        help = "download model assets if not already downloaded (stored under ~/.mdsearch/models by default)"
-    )]
-    pub(crate) download: bool,
-}
-
-#[derive(Debug, Args)]
-pub(crate) struct HybridArgs {
-    #[arg(value_name = "QUERY", help = "literal search terms")]
-    pub(crate) query: String,
-    #[arg(
-        short = 'c',
-        long,
-        value_name = "NAME",
-        help = "restrict search to this collection (default: all collections)"
-    )]
-    pub(crate) collection: Option<String>,
-    #[arg(
-        short = 'n',
-        long,
-        value_name = "N",
-        default_value_t = 10,
-        help = "maximum results (1–100, default: 10)"
-    )]
-    #[arg(value_parser = clap::value_parser!(u16).range(1..=100))]
-    pub(crate) limit: u16,
-    #[arg(long)]
-    pub(crate) json: bool,
-    #[arg(long)]
-    pub(crate) related: bool,
-    #[arg(long)]
+    #[arg(long, value_enum, default_value_t = SearchMode::Lexical, help = "retrieval mode (default: lexical)")]
+    pub(crate) mode: SearchMode,
+    #[arg(long, help = "disable re-ranking in hybrid mode")]
     pub(crate) no_rerank: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub(crate) enum SearchMode {
+    Lexical,
+    Hybrid,
+}
+
+#[derive(Debug, Args)]
+#[command(group(clap::ArgGroup::new("selector").required(true).args(["path_or_name", "id"])))]
+pub(crate) struct GetArgs {
+    #[arg(
+        short = 'c',
+        long,
+        required = true,
+        value_name = "NAME",
+        help = "collection containing the file"
+    )]
+    pub(crate) collection: String,
+    #[arg(
+        value_name = "PATH_OR_NAME",
+        help = "exact stored path or unique basename (numeric names remain names)"
+    )]
+    pub(crate) path_or_name: Option<String>,
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..=i64::MAX as u64), help = "explicit stored file ID")]
+    pub(crate) id: Option<u64>,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct CreateCollectionArgs {
     #[arg(value_name = "NAME", help = "new collection name")]
     pub(crate) name: String,
-    #[arg(value_name = "PATH", num_args = 1.., help = "Markdown file or directory source")]
+    #[arg(value_name = "PATH", required = true, num_args = 1.., help = "Markdown file or directory source")]
     pub(crate) paths: Vec<PathBuf>,
     #[arg(long, help = "enable semantic indexing for this collection")]
     pub(crate) semantic: bool,
@@ -283,6 +260,7 @@ pub(crate) struct ListCollectionsArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(group(clap::ArgGroup::new("configuration").required(true).multiple(true).args(["paths", "semantic"])))]
 pub(crate) struct ConfigureCollectionArgs {
     #[arg(value_name = "NAME", help = "collection to configure")]
     pub(crate) name: String,
@@ -299,35 +277,30 @@ pub(crate) struct DestroyCollectionArgs {
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct AddFilesArgs {
-    #[arg(value_name = "NAME", help = "existing collection to receive the files")]
-    pub(crate) name: String,
-    #[arg(value_name = "PATH", required = true, num_args = 1..)]
-    pub(crate) paths: Vec<PathBuf>,
-    #[arg(long, help = "skip unreadable files and continue ingestion")]
-    pub(crate) skip_unreadable: bool,
-}
-
-#[derive(Debug, Args)]
+#[command(group(clap::ArgGroup::new("scope").required(true).args(["all", "name"])))]
 pub(crate) struct UpdateCollectionArgs {
-    #[arg(long)]
-    pub(crate) all: bool,
-    #[arg(
-        long = "collection",
-        short = 'c',
-        value_name = "NAME",
-        conflicts_with = "all"
-    )]
-    pub(crate) name: Option<String>,
-    #[arg(value_name = "NAME", conflicts_with = "all")]
-    pub(crate) legacy_name: Option<String>,
-    #[arg(value_name = "PATH", num_args = 1..)]
-    pub(crate) legacy_paths: Vec<PathBuf>,
-    #[arg(long, help = "skip unreadable files and continue updating")]
+    #[command(flatten)]
+    pub(crate) scope: UpdateScopeArgs,
+    #[arg(long, help = "skip unreadable files, retaining their stored content")]
     pub(crate) skip_unreadable: bool,
     #[arg(
         long,
-        help = "download model assets required for enabled semantic indexes"
+        help = "download missing model assets required by enabled semantic indexes"
     )]
     pub(crate) download: bool,
+    #[arg(long, help = "write a complete per-collection JSON report")]
+    pub(crate) json: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct UpdateScopeArgs {
+    #[arg(long, help = "update every collection, continuing after failures")]
+    pub(crate) all: bool,
+    #[arg(
+        short = 'c',
+        long = "collection",
+        value_name = "NAME",
+        help = "collection to update"
+    )]
+    pub(crate) name: Option<String>,
 }

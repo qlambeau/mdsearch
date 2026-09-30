@@ -6,7 +6,10 @@ use std::path::Path;
 
 use tempfile::tempdir;
 
-use kv_app::run;
+mod common;
+#[path = "common/ingestion.rs"]
+mod ingestion;
+use common::run;
 
 fn path_argument(path: &Path) -> Result<&str, std::io::Error> {
     path.to_str()
@@ -14,7 +17,16 @@ fn path_argument(path: &Path) -> Result<&str, std::io::Error> {
 }
 
 fn create(home: &Path, collection: &str) -> Result<(), Box<dyn Error>> {
-    run(["mdsearch", "collection", "create", collection], home)?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "create",
+            collection,
+            home.to_str().ok_or("UTF-8 fixture path required")?,
+        ],
+        home,
+    )?;
     Ok(())
 }
 
@@ -28,15 +40,12 @@ fn add_and_update(
     fs::create_dir_all(&source_root)?;
     let target_file = source_root.join(file.file_name().ok_or("source file has no name")?);
     fs::write(&target_file, content)?;
-    run(
-        [
-            "mdsearch",
-            "collection",
-            "add",
-            collection,
-            path_argument(&target_file)?,
-        ],
+    ingestion::ingest(
         home,
+        collection,
+        &[path_argument(&target_file)?],
+        false,
+        None,
     )?;
     run(
         [
@@ -49,16 +58,7 @@ fn add_and_update(
         ],
         home,
     )?;
-    run(
-        [
-            "mdsearch",
-            "collection",
-            "update",
-            "--collection",
-            collection,
-        ],
-        home,
-    )?;
+    run(["mdsearch", "update", "--collection", collection], home)?;
     Ok(())
 }
 
@@ -142,16 +142,7 @@ fn search_reports_an_unbuilt_index() -> Result<(), Box<dyn Error>> {
     let file = home.path().join("a.md");
     fs::write(&file, "borrowing")?;
     create(home.path(), "Notes")?;
-    run(
-        [
-            "mdsearch",
-            "collection",
-            "add",
-            "Notes",
-            path_argument(&file)?,
-        ],
-        home.path(),
-    )?;
+    ingestion::ingest(home.path(), "Notes", &[path_argument(&file)?], false, None)?;
 
     let error = run(
         ["mdsearch", "search", "borrowing", "--collection", "Notes"],
@@ -175,10 +166,7 @@ fn search_skips_unbuilt_collections_when_searching_all() -> Result<(), Box<dyn E
     add_and_update(home.path(), "Notes", &a, "borrowing")?;
     fs::write(&d, "borrowing")?;
     create(home.path(), "Draft")?;
-    run(
-        ["mdsearch", "collection", "add", "Draft", path_argument(&d)?],
-        home.path(),
-    )?;
+    ingestion::ingest(home.path(), "Draft", &[path_argument(&d)?], false, None)?;
 
     let output = run(["mdsearch", "search", "borrowing"], home.path())?;
 
@@ -362,7 +350,7 @@ fn search_produces_empty_output_when_nothing_matches() -> Result<(), Box<dyn Err
 
     let output = run(["mdsearch", "search", "zzznotaword"], home.path())?;
 
-    assert_eq!(output, "");
+    assert_eq!(output, "no matches");
 
     Ok(())
 }

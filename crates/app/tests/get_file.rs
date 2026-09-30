@@ -6,7 +6,10 @@ use std::path::Path;
 
 use tempfile::tempdir;
 
-use kv_app::run;
+mod common;
+#[path = "common/ingestion.rs"]
+mod ingestion;
+use common::run;
 
 fn path_argument(path: &Path) -> Result<&str, std::io::Error> {
     path.to_str()
@@ -14,7 +17,16 @@ fn path_argument(path: &Path) -> Result<&str, std::io::Error> {
 }
 
 fn create(home: &Path, collection: &str) -> Result<(), Box<dyn Error>> {
-    run(["mdsearch", "collection", "create", collection], home)?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "create",
+            collection,
+            home.to_str().ok_or("UTF-8 fixture path required")?,
+        ],
+        home,
+    )?;
     Ok(())
 }
 
@@ -28,16 +40,7 @@ fn add_file(
         fs::create_dir_all(parent)?;
     }
     fs::write(file, content)?;
-    run(
-        [
-            "mdsearch",
-            "collection",
-            "add",
-            collection,
-            path_argument(file)?,
-        ],
-        home,
-    )?;
+    ingestion::ingest(home, collection, &[path_argument(file)?], false, None)?;
     Ok(())
 }
 
@@ -59,7 +62,13 @@ fn get_retrieves_by_exact_path() -> Result<(), Box<dyn Error>> {
     store_file(home.path(), "Notes", &file, "alpha")?;
 
     let output = run(
-        ["mdsearch", "get", "Notes", path_argument(&file)?],
+        [
+            "mdsearch",
+            "get",
+            path_argument(&file)?,
+            "--collection",
+            "Notes",
+        ],
         home.path(),
     )?;
 
@@ -75,7 +84,10 @@ fn get_retrieves_by_unique_basename() -> Result<(), Box<dyn Error>> {
     let file = home.path().join("vault").join("notes.md");
     store_file(home.path(), "Notes", &file, "alpha")?;
 
-    let output = run(["mdsearch", "get", "Notes", "notes.md"], home.path())?;
+    let output = run(
+        ["mdsearch", "get", "notes.md", "--collection", "Notes"],
+        home.path(),
+    )?;
 
     assert_eq!(output, "alpha");
 
@@ -90,18 +102,18 @@ fn get_retrieves_by_id() -> Result<(), Box<dyn Error>> {
     let second = home.path().join("b.md");
     store_file(home.path(), "Notes", &first, "alpha")?;
     fs::write(&second, "beta")?;
-    run(
-        [
-            "mdsearch",
-            "collection",
-            "add",
-            "Notes",
-            path_argument(&second)?,
-        ],
+    ingestion::ingest(
         home.path(),
+        "Notes",
+        &[path_argument(&second)?],
+        false,
+        None,
     )?;
 
-    let output = run(["mdsearch", "get", "Notes", "2"], home.path())?;
+    let output = run(
+        ["mdsearch", "get", "--id", "2", "--collection", "Notes"],
+        home.path(),
+    )?;
 
     assert_eq!(output, "beta");
 
@@ -118,9 +130,12 @@ fn get_reports_an_ambiguous_basename_with_candidates() -> Result<(), Box<dyn Err
     add_file(home.path(), "Notes", &a, "one")?;
     add_file(home.path(), "Notes", &b, "two")?;
 
-    let error = run(["mdsearch", "get", "Notes", "x.md"], home.path())
-        .err()
-        .ok_or_else(|| std::io::Error::other("an ambiguous basename should fail"))?;
+    let error = run(
+        ["mdsearch", "get", "x.md", "--collection", "Notes"],
+        home.path(),
+    )
+    .err()
+    .ok_or_else(|| std::io::Error::other("an ambiguous basename should fail"))?;
 
     let message = error.to_string();
     assert!(message.contains("ambiguous"), "unexpected error: {message}");
@@ -136,9 +151,12 @@ fn get_reports_a_file_not_found_by_name() -> Result<(), Box<dyn Error>> {
     let file = home.path().join("notes.md");
     store_file(home.path(), "Notes", &file, "alpha")?;
 
-    let error = run(["mdsearch", "get", "Notes", "missing.md"], home.path())
-        .err()
-        .ok_or_else(|| std::io::Error::other("a missing file should fail"))?;
+    let error = run(
+        ["mdsearch", "get", "missing.md", "--collection", "Notes"],
+        home.path(),
+    )
+    .err()
+    .ok_or_else(|| std::io::Error::other("a missing file should fail"))?;
 
     assert!(
         error.to_string().contains("not found"),
@@ -155,9 +173,12 @@ fn get_reports_a_file_not_found_by_id() -> Result<(), Box<dyn Error>> {
     let file = home.path().join("notes.md");
     store_file(home.path(), "Notes", &file, "alpha")?;
 
-    let error = run(["mdsearch", "get", "Notes", "999"], home.path())
-        .err()
-        .ok_or_else(|| std::io::Error::other("a missing file should fail"))?;
+    let error = run(
+        ["mdsearch", "get", "--id", "999", "--collection", "Notes"],
+        home.path(),
+    )
+    .err()
+    .ok_or_else(|| std::io::Error::other("a missing file should fail"))?;
 
     assert!(
         error.to_string().contains("not found"),
@@ -174,9 +195,12 @@ fn get_reports_a_missing_collection() -> Result<(), Box<dyn Error>> {
     let file = home.path().join("notes.md");
     store_file(home.path(), "Notes", &file, "alpha")?;
 
-    let error = run(["mdsearch", "get", "Journal", "notes.md"], home.path())
-        .err()
-        .ok_or_else(|| std::io::Error::other("a missing collection should fail"))?;
+    let error = run(
+        ["mdsearch", "get", "notes.md", "--collection", "Journal"],
+        home.path(),
+    )
+    .err()
+    .ok_or_else(|| std::io::Error::other("a missing collection should fail"))?;
 
     assert!(
         error.to_string().contains("not found"),
@@ -197,8 +221,9 @@ fn get_reports_a_missing_database_without_creating_it() -> Result<(), Box<dyn Er
         [
             "mdsearch",
             "get",
-            "Notes",
             "notes.md",
+            "--collection",
+            "Notes",
             "--database",
             database_argument,
         ],

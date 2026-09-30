@@ -6,7 +6,8 @@ use std::path::Path;
 
 use tempfile::tempdir;
 
-use kv_app::run;
+mod common;
+use common::run;
 
 fn path_argument(path: &Path) -> Result<&str, std::io::Error> {
     path.to_str()
@@ -34,16 +35,7 @@ fn store_and_update(
         ],
         home,
     )?;
-    run(
-        [
-            "mdsearch",
-            "collection",
-            "update",
-            "--collection",
-            collection,
-        ],
-        home,
-    )?;
+    run(["mdsearch", "update", "--collection", collection], home)?;
     Ok(())
 }
 

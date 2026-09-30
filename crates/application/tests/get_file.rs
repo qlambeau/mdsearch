@@ -114,7 +114,7 @@ fn retrieves_by_id() -> Result<(), Box<dyn Error>> {
     store.store("notes", "/vault/other.md", "beta");
     let use_case = GetFile::new(store);
 
-    let file = use_case.execute(&collection()?, "1")?;
+    let file = use_case.execute(&collection()?, FileId::try_new(1)?)?;
 
     assert_eq!(file.content(), b"alpha");
 
@@ -171,7 +171,7 @@ fn reports_not_found_by_id() -> Result<(), Box<dyn Error>> {
     let use_case = GetFile::new(store);
 
     let error = use_case
-        .execute(&collection()?, "999")
+        .execute(&collection()?, FileId::try_new(999)?)
         .err()
         .ok_or_else(|| std::io::Error::other("a missing file should fail"))?;
 

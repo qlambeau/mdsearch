@@ -5,19 +5,45 @@ use std::process::Command;
 
 use tempfile::tempdir;
 
-use kv_app::run;
+mod common;
+use common::run;
 use kv_store_sqlite::SqliteCollectionStore;
 
 /// Covers: FR-001, FR-002, and FR-004 — list the default database.
 #[test]
 fn lists_collections_at_the_default_database_path() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
-    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
-    run(["mdsearch", "collection", "create", "Archive"], home.path())?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "create",
+            "Notes",
+            home.path().to_str().ok_or("UTF-8 fixture path required")?,
+        ],
+        home.path(),
+    )?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "create",
+            "Archive",
+            home.path().to_str().ok_or("UTF-8 fixture path required")?,
+        ],
+        home.path(),
+    )?;
 
     let output = run(["mdsearch", "collection", "list"], home.path())?;
 
-    assert_eq!(output, "Archive\nNotes");
+    assert_eq!(
+        output,
+        format!(
+            "Archive [lexical, graph]\n  {}\nNotes [lexical, graph]\n  {}",
+            home.path().display(),
+            home.path().display()
+        )
+    );
 
     Ok(())
 }
@@ -27,12 +53,29 @@ fn lists_collections_at_the_default_database_path() -> Result<(), Box<dyn Error>
 fn lists_collections_in_case_insensitive_alphabetical_order() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
     for name in ["banana", "Apple", "cherry"] {
-        run(["mdsearch", "collection", "create", name], home.path())?;
+        run(
+            [
+                "mdsearch",
+                "collection",
+                "create",
+                name,
+                home.path().to_str().ok_or("UTF-8 fixture path required")?,
+            ],
+            home.path(),
+        )?;
     }
 
     let output = run(["mdsearch", "collection", "list"], home.path())?;
 
-    assert_eq!(output, "Apple\nbanana\ncherry");
+    assert_eq!(
+        output,
+        format!(
+            "Apple [lexical, graph]\n  {}\nbanana [lexical, graph]\n  {}\ncherry [lexical, graph]\n  {}",
+            home.path().display(),
+            home.path().display(),
+            home.path().display()
+        )
+    );
 
     Ok(())
 }
@@ -122,6 +165,7 @@ fn lists_collections_at_the_explicit_database_path() -> Result<(), Box<dyn Error
             "collection",
             "create",
             "Project Notes",
+            home.path().to_str().ok_or("UTF-8 fixture path required")?,
             "--database",
             database_argument,
         ],
@@ -139,7 +183,13 @@ fn lists_collections_at_the_explicit_database_path() -> Result<(), Box<dyn Error
         home.path(),
     )?;
 
-    assert_eq!(output, "Project Notes");
+    assert_eq!(
+        output,
+        format!(
+            "Project Notes [lexical, graph]\n  {}",
+            home.path().display()
+        )
+    );
 
     Ok(())
 }
@@ -148,11 +198,23 @@ fn lists_collections_at_the_explicit_database_path() -> Result<(), Box<dyn Error
 #[test]
 fn lists_a_collection_across_cli_runs() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
-    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "create",
+            "Notes",
+            home.path().to_str().ok_or("UTF-8 fixture path required")?,
+        ],
+        home.path(),
+    )?;
 
     let output = run(["mdsearch", "collection", "list"], home.path())?;
 
-    assert_eq!(output, "Notes");
+    assert_eq!(
+        output,
+        format!("Notes [lexical, graph]\n  {}", home.path().display())
+    );
 
     Ok(())
 }
@@ -161,7 +223,16 @@ fn lists_a_collection_across_cli_runs() -> Result<(), Box<dyn Error>> {
 #[test]
 fn binary_lists_collections() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
-    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "create",
+            "Notes",
+            home.path().to_str().ok_or("UTF-8 fixture path required")?,
+        ],
+        home.path(),
+    )?;
 
     let output = Command::new(env!("CARGO_BIN_EXE_mdsearch"))
         .args(["collection", "list"])
@@ -169,7 +240,10 @@ fn binary_lists_collections() -> Result<(), Box<dyn Error>> {
         .output()?;
 
     assert!(output.status.success());
-    assert_eq!(String::from_utf8(output.stdout)?, "Notes\n");
+    assert_eq!(
+        String::from_utf8(output.stdout)?,
+        format!("Notes [lexical, graph]\n  {}\n", home.path().display())
+    );
 
     Ok(())
 }

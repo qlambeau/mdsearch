@@ -6,7 +6,8 @@ use std::path::Path;
 
 use tempfile::tempdir;
 
-use kv_app::run;
+mod common;
+use common::run;
 
 fn path_argument(path: &Path) -> Result<&str, std::io::Error> {
     path.to_str()
@@ -22,7 +23,9 @@ fn embed_missing_database_fails_without_creating_a_file() -> Result<(), Box<dyn 
     let error = run(
         [
             "mdsearch",
-            "embed",
+            "model",
+            "set",
+            "all-MiniLM-L6-v2",
             "--database",
             path_argument(&database_path)?,
         ],
@@ -55,12 +58,9 @@ fn embed_unsupported_model_fails_before_any_collection_work() -> Result<(), Box<
         ],
         home.path(),
     )?;
-    run(
-        ["mdsearch", "collection", "update", "--collection", "Notes"],
-        home.path(),
-    )?;
+    run(["mdsearch", "update", "--collection", "Notes"], home.path())?;
 
-    let error = run(["mdsearch", "embed", "--model", "bogus-model"], home.path())
+    let error = run(["mdsearch", "model", "set", "bogus-model"], home.path())
         .err()
         .ok_or_else(|| std::io::Error::other("an unsupported model should fail"))?;
 
@@ -87,14 +87,14 @@ fn embed_uncached_model_suggests_download() -> Result<(), Box<dyn Error>> {
         ],
         home.path(),
     )?;
-    run(
-        ["mdsearch", "collection", "update", "--collection", "Notes"],
-        home.path(),
-    )?;
+    run(["mdsearch", "update", "--collection", "Notes"], home.path())?;
 
-    let error = run(["mdsearch", "embed"], home.path())
-        .err()
-        .ok_or_else(|| std::io::Error::other("an uncached model should fail"))?;
+    let error = run(
+        ["mdsearch", "model", "set", "all-MiniLM-L6-v2"],
+        home.path(),
+    )
+    .err()
+    .ok_or_else(|| std::io::Error::other("an uncached model should fail"))?;
 
     let message = error.to_string();
     assert!(message.contains("--download"));
@@ -120,13 +120,10 @@ fn embed_unsupported_reranker_fails() -> Result<(), Box<dyn Error>> {
         ],
         home.path(),
     )?;
-    run(
-        ["mdsearch", "collection", "update", "--collection", "Notes"],
-        home.path(),
-    )?;
+    run(["mdsearch", "update", "--collection", "Notes"], home.path())?;
 
     let error = run(
-        ["mdsearch", "embed", "--reranker", "bogus-reranker"],
+        ["mdsearch", "model", "set", "--reranker", "bogus-reranker"],
         home.path(),
     )
     .err()
@@ -155,13 +152,16 @@ fn embed_uncached_reranker_suggests_download() -> Result<(), Box<dyn Error>> {
         ],
         home.path(),
     )?;
-    run(
-        ["mdsearch", "collection", "update", "--collection", "Notes"],
-        home.path(),
-    )?;
+    run(["mdsearch", "update", "--collection", "Notes"], home.path())?;
 
     let error = run(
-        ["mdsearch", "embed", "--reranker", "bge-reranker-base"],
+        [
+            "mdsearch",
+            "model",
+            "set",
+            "--reranker",
+            "bge-reranker-base",
+        ],
         home.path(),
     )
     .err()

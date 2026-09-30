@@ -7,6 +7,7 @@ mod file_store;
 mod file_system;
 mod graph_store;
 mod hybrid_search_store;
+mod index_inspection_store;
 mod lexical_index_store;
 mod lexical_search_store;
 mod reranker;
@@ -25,10 +26,14 @@ pub use graph_store::{GraphStore, InMemoryGraphStore, Neighbor, traverse_graph};
 pub use hybrid_search_store::{HybridCandidate, HybridCandidates, HybridSearchStore};
 pub use lexical_index_store::{IndexState, IndexStatus, LexicalIndexStore, SemanticStatus};
 pub use lexical_search_store::{
-    LexicalSearchStore, Position, SearchResult, SearchResultSet, SearchScope,
+    LexicalSearchStore, Position, SearchFile, SearchResult, SearchResultSet, SearchScope,
 };
 pub use reranker::Reranker;
 pub use semantic_index_store::{
     CollectionIndexUpdate, EmbedTarget, PreparedSemanticCollection, PreparedSemanticPassage,
     SemanticIndexStore,
+};
+
+pub use index_inspection_store::{
+    CollectionIndexInspection, DatabaseIndexInspection, IndexInspection, IndexInspectionStore,
 };

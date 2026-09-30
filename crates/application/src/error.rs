@@ -123,6 +123,9 @@ pub enum UpdateCollectionError {
 /// Describes a failure while reading lexical index state.
 #[derive(Debug, Error)]
 pub enum IndexStoreError {
+    /// The requested inspection scope does not exist.
+    #[error("collection not found")]
+    CollectionNotFound,
     /// The database operation failed after it was opened.
     #[error("index storage failed")]
     Storage(#[source] Box<dyn Error + Send + Sync>),
@@ -271,7 +274,7 @@ pub enum HybridSearchStoreError {
     #[error("lexical index is not built")]
     IndexNotBuilt,
     /// An in-scope collection's semantic index is stale.
-    #[error("semantic index is stale; run mdsearch embed")]
+    #[error("semantic index is stale")]
     StaleSemanticIndex,
     /// An in-scope collection's recorded dimension disagrees with the active
     /// embedding dimension.

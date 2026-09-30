@@ -1,8 +1,5 @@
 use crate::related::RelatedFile;
-use kv_application::{
-    EmbedOutcome, EmbedReport, HybridResultSet, IndexState, IndexStatus, SearchResultSet,
-    SkipReason,
-};
+use kv_application::{EmbedOutcome, EmbedReport, HybridResultSet, SearchResultSet, SkipReason};
 
 pub(crate) fn render_human(set: &SearchResultSet, related: Option<&[Vec<RelatedFile>]>) -> String {
     let mut lines = Vec::new();
@@ -27,9 +24,16 @@ pub(crate) fn render_human(set: &SearchResultSet, related: Option<&[Vec<RelatedF
                 result.score()
             )
         };
-        lines.push(header);
+        lines.push(format!(
+            "{header} [{}, file_id {}]",
+            result.collection().display_name(),
+            result.file_id().as_u64()
+        ));
         lines.push(result.text().to_owned());
         render_related_lines(&mut lines, related, index);
+    }
+    if set.results().is_empty() {
+        lines.push("no matches".to_owned());
     }
     if !set.results().is_empty() {
         lines.push(format!("{} match(es)", set.total()));
@@ -69,6 +73,7 @@ pub(crate) fn render_json(
             let position = result.position();
             let mut value = serde_json::json!({
                 "collection": result.collection().display_name(),
+                "file_id": result.file_id().as_u64(),
                 "path": result.path().to_string_lossy(),
                 "kind": result.kind().as_str(),
                 "text": result.text(),
@@ -86,6 +91,7 @@ pub(crate) fn render_json(
         .collect();
 
     serde_json::json!({
+        "mode": "lexical",
         "query": query,
         "scope": scope,
         "limit": limit,
@@ -143,9 +149,16 @@ pub(crate) fn render_hybrid_human(
                 result.ordering_score()
             )
         };
-        lines.push(header);
+        lines.push(format!(
+            "{header} [{}, file_id {}]",
+            result.collection().display_name(),
+            result.file_id().as_u64()
+        ));
         lines.push(result.text().to_owned());
         render_related_lines(&mut lines, related, index);
+    }
+    if set.results().is_empty() {
+        lines.push("no matches".to_owned());
     }
     if !set.results().is_empty() {
         lines.push(format!("{} result(s)", set.results().len()));
@@ -171,6 +184,7 @@ pub(crate) fn render_hybrid_json(
             let position = result.position();
             let mut value = serde_json::json!({
                 "collection": result.collection().display_name(),
+                "file_id": result.file_id().as_u64(),
                 "path": result.path().to_string_lossy(),
                 "kind": result.kind().as_str(),
                 "text": result.text(),
@@ -192,6 +206,7 @@ pub(crate) fn render_hybrid_json(
         .collect();
 
     serde_json::json!({
+        "mode": "hybrid",
         "query": query,
         "scope": scope,
         "limit": limit,
@@ -235,31 +250,5 @@ pub(crate) fn render_embed_outcome(outcome: &EmbedOutcome) -> String {
         EmbedOutcome::Failed { message, .. } => {
             format!("collection \"{name}\": failed ({message})")
         }
-    }
-}
-
-pub(crate) fn render_index_status(status: &IndexStatus) -> String {
-    let semantic = status
-        .semantic()
-        .map(|line| {
-            format!(
-                ", embedded with {} ({} dimensions)",
-                line.model().as_str(),
-                line.dimension()
-            )
-        })
-        .unwrap_or_default();
-    match (status.state(), status.built_at()) {
-        (IndexState::Built, Some(timestamp)) => format!(
-            "collection \"{}\": lexical index built, {} file(s), {} passage(s), built at {}{semantic}",
-            status.collection().display_name(),
-            status.file_count(),
-            status.passage_count(),
-            timestamp.as_unix_seconds()
-        ),
-        _ => format!(
-            "collection \"{}\": lexical index not built",
-            status.collection().display_name()
-        ),
     }
 }

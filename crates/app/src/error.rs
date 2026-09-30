@@ -10,6 +10,9 @@ use kv_domain::{CollectionNameError, EmbeddingModelError, RerankerModelError};
 /// Describes a user-visible failure from the `mdsearch` CLI.
 #[derive(Debug, Error)]
 pub enum AppError {
+    /// A complete update report whose failed outcomes require exit 1.
+    #[error("{0}")]
+    UpdateReportFailed(String),
     /// The command needs a default path but the home directory is unavailable.
     #[error("home directory is unavailable")]
     HomeUnavailable,
@@ -52,6 +55,15 @@ pub enum AppError {
     /// The hybrid-search use case failed.
     #[error(transparent)]
     Hybrid(#[from] HybridError),
+    /// A hybrid prerequisite failed, with an actionable recovery command.
+    #[error("{source}; recover with: {recovery}")]
+    HybridPrerequisite {
+        /// The typed retrieval failure and its cause chain.
+        #[source]
+        source: HybridError,
+        /// A command using the selected database and final grammar.
+        recovery: String,
+    },
     /// The graph query failed.
     #[error(transparent)]
     Graph(#[from] GraphStoreError),

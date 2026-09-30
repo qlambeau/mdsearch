@@ -9,6 +9,8 @@ pub struct CollectionSourceSummary {
     pub name: CollectionName,
     /// The registered canonical source paths.
     pub sources: Vec<CollectionSource>,
+    /// Whether semantic indexing is configured for this collection.
+    pub semantic_enabled: bool,
 }
 
 /// Persists collection source configuration.
@@ -106,6 +108,7 @@ pub mod fake {
                 CollectionSourceSummary {
                     name: name.clone(),
                     sources: sources.to_vec(),
+                    semantic_enabled: false,
                 },
             );
             Ok(())

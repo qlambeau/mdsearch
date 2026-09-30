@@ -4,6 +4,26 @@ use kv_domain::{CollectionName, FileId};
 
 use crate::{FileRetrievalStore, GetFileError, RetrievedFile};
 
+/// An explicit stored-file selector (REQ-023 FR-016).
+pub enum FileSelector<'a> {
+    /// An exact path or unique basename, including numeric names.
+    Name(&'a str),
+    /// A validated stored file ID.
+    Id(FileId),
+}
+
+impl<'a> From<&'a str> for FileSelector<'a> {
+    fn from(name: &'a str) -> Self {
+        Self::Name(name)
+    }
+}
+
+impl From<FileId> for FileSelector<'_> {
+    fn from(id: FileId) -> Self {
+        Self::Id(id)
+    }
+}
+
 /// Retrieves a complete stored file by name or ID.
 pub struct GetFile<S> {
     store: S,
@@ -19,28 +39,29 @@ where
         Self { store }
     }
 
-    /// Returns the stored file addressed by `name_or_id` in `collection`.
+    /// Returns the stored file addressed by an explicit selector in `collection`.
     ///
-    /// An all-digit positive argument is treated as a file ID; otherwise it is
-    /// a name resolved by exact canonical path and then by unique basename.
+    /// Names resolve by exact path and then unique basename; only typed IDs
+    /// select the stored ID lookup.
     ///
     /// # Errors
     ///
     /// Returns a not-found, ambiguous-basename, or store error when the file
     /// cannot be retrieved.
-    pub fn execute(
+    pub fn execute<'a>(
         &self,
         collection: &CollectionName,
-        name_or_id: &str,
+        selector: impl Into<FileSelector<'a>>,
     ) -> Result<RetrievedFile, GetFileError> {
-        if let Ok(value) = name_or_id.parse::<u64>()
-            && let Ok(id) = FileId::try_new(value)
-        {
-            return self
-                .store
-                .get_by_id(collection, id)?
-                .ok_or(GetFileError::FileNotFound);
-        }
+        let name_or_id = match selector.into() {
+            FileSelector::Id(id) => {
+                return self
+                    .store
+                    .get_by_id(collection, id)?
+                    .ok_or(GetFileError::FileNotFound);
+            }
+            FileSelector::Name(name) => name,
+        };
 
         let path = PathBuf::from(name_or_id);
         if let Some(file) = self.store.get_by_path(collection, &path)? {

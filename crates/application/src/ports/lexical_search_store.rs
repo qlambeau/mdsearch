@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use kv_domain::{CollectionName, PassageKind};
+use kv_domain::{CollectionName, FileId, PassageKind};
 
 use crate::SearchStoreError;
 
@@ -64,11 +64,29 @@ impl Position {
     }
 }
 
+/// Stable stored-file identity and provenance (REQ-023 FR-015).
+#[derive(Clone, Debug)]
+pub struct SearchFile {
+    id: FileId,
+    collection: CollectionName,
+    path: PathBuf,
+}
+impl SearchFile {
+    /// Creates the identity of an indexed file.
+    #[must_use]
+    pub const fn new(id: FileId, collection: CollectionName, path: PathBuf) -> Self {
+        Self {
+            id,
+            collection,
+            path,
+        }
+    }
+}
+
 /// One ranked passage match.
 #[derive(Clone, Debug)]
 pub struct SearchResult {
-    collection: CollectionName,
-    path: PathBuf,
+    file: SearchFile,
     kind: PassageKind,
     text: String,
     score: f64,
@@ -79,16 +97,14 @@ impl SearchResult {
     /// Creates a search result record.
     #[must_use]
     pub fn new(
-        collection: CollectionName,
-        path: PathBuf,
+        file: SearchFile,
         kind: PassageKind,
         text: String,
         score: f64,
         position: Position,
     ) -> Self {
         Self {
-            collection,
-            path,
+            file,
             kind,
             text,
             score,
@@ -96,16 +112,22 @@ impl SearchResult {
         }
     }
 
+    /// Returns the explicit stored file ID.
+    #[must_use]
+    pub const fn file_id(&self) -> FileId {
+        self.file.id
+    }
+
     /// Returns the collection the passage belongs to.
     #[must_use]
     pub fn collection(&self) -> &CollectionName {
-        &self.collection
+        &self.file.collection
     }
 
     /// Returns the file path of the passage.
     #[must_use]
     pub fn path(&self) -> &Path {
-        &self.path
+        &self.file.path
     }
 
     /// Returns the passage kind.

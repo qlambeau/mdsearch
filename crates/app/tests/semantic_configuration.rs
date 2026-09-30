@@ -3,7 +3,8 @@
 use std::error::Error;
 use std::fs;
 
-use kv_app::run;
+mod common;
+use common::run;
 use kv_application::SemanticIndexStore;
 use kv_domain::CollectionName;
 use kv_store_sqlite::SqliteSemanticIndexStore;
@@ -34,9 +35,12 @@ fn create_accepts_semantic_opt_in_without_indexing_files() -> Result<(), Box<dyn
         home.path(),
     )?;
 
-    let error = run(["mdsearch", "get", "Notes", "note.md"], home.path())
-        .err()
-        .ok_or("semantic opt-in must not index files")?;
+    let error = run(
+        ["mdsearch", "get", "note.md", "--collection", "Notes"],
+        home.path(),
+    )
+    .err()
+    .ok_or("semantic opt-in must not index files")?;
     assert!(error.to_string().contains("file not found"));
 
     Ok(())
@@ -46,7 +50,16 @@ fn create_accepts_semantic_opt_in_without_indexing_files() -> Result<(), Box<dyn
 #[test]
 fn configure_accepts_semantic_policy_without_indexing() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
-    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "create",
+            "Notes",
+            home.path().to_str().ok_or("UTF-8 fixture path required")?,
+        ],
+        home.path(),
+    )?;
 
     run(
         [
@@ -86,6 +99,7 @@ fn model_list_reports_supported_models_and_local_availability() -> Result<(), Bo
 #[test]
 fn reranker_only_model_set_is_accepted() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
+    kv_store_sqlite::SqliteCollectionStore::open(&home.path().join(".mdsearch/collections.db"))?;
     let error = run(
         [
             "mdsearch",
@@ -109,7 +123,16 @@ fn reranker_only_model_set_is_accepted() -> Result<(), Box<dyn Error>> {
 fn reranker_only_model_set_preserves_the_embedding_model_and_vectors() -> Result<(), Box<dyn Error>>
 {
     let home = tempdir()?;
-    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "create",
+            "Notes",
+            home.path().to_str().ok_or("UTF-8 fixture path required")?,
+        ],
+        home.path(),
+    )?;
     let cache = home.path().join(".mdsearch/models");
     fs::create_dir_all(&cache)?;
     fs::write(cache.join("bge-reranker-base.completed"), "ok")?;
@@ -150,9 +173,9 @@ fn model_set_requires_at_least_one_model() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Covers: REQ-022 FR-013 — the legacy embed command cannot enable policy implicitly.
+/// Covers: REQ-023 FR-001 — the retired embed command cannot alter collection policy.
 #[test]
-fn embed_requires_semantic_configuration_first() -> Result<(), Box<dyn Error>> {
+fn retired_embed_cannot_enable_semantic_configuration() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
     let vault = home.path().join("vault");
     fs::create_dir_all(&vault)?;
@@ -167,10 +190,7 @@ fn embed_requires_semantic_configuration_first() -> Result<(), Box<dyn Error>> {
         ],
         home.path(),
     )?;
-    run(
-        ["mdsearch", "collection", "update", "--collection", "Notes"],
-        home.path(),
-    )?;
+    run(["mdsearch", "update", "--collection", "Notes"], home.path())?;
 
     let error = run(
         [
@@ -186,7 +206,7 @@ fn embed_requires_semantic_configuration_first() -> Result<(), Box<dyn Error>> {
     .err()
     .ok_or("disabled semantic indexing should reject embed")?;
 
-    assert!(error.to_string().contains("enable semantic indexing"));
+    assert!(error.to_string().contains("unrecognized subcommand"));
 
     Ok(())
 }

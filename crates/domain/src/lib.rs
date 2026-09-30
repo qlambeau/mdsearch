@@ -10,6 +10,7 @@ mod embedding;
 mod file_id;
 mod fusion;
 mod graph;
+mod index_readiness;
 mod passage;
 mod reranking;
 mod timestamp;
@@ -29,3 +30,5 @@ pub use graph::{
 pub use passage::{FrontmatterIssue, Passage, PassageKind, segment_passages};
 pub use reranking::{RerankerModel, RerankerModelError};
 pub use timestamp::Timestamp;
+
+pub use index_readiness::{IndexEnablement, IndexFreshness, IndexReadiness};

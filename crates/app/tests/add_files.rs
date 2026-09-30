@@ -6,7 +6,10 @@ use std::path::Path;
 
 use tempfile::tempdir;
 
-use kv_app::run;
+mod common;
+#[path = "common/ingestion.rs"]
+mod ingestion;
+use common::run;
 
 fn path_argument(path: &Path) -> Result<&str, std::io::Error> {
     path.to_str()
@@ -23,18 +26,18 @@ fn adds_files_from_a_directory_recursively() -> Result<(), Box<dyn Error>> {
     fs::write(vault.join("sub").join("b.md"), "beta")?;
     fs::write(vault.join("readme.txt"), "not markdown")?;
 
-    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
-
-    let output = run(
+    run(
         [
             "mdsearch",
             "collection",
-            "add",
+            "create",
             "Notes",
-            path_argument(&vault)?,
+            home.path().to_str().ok_or("UTF-8 fixture path required")?,
         ],
         home.path(),
     )?;
+
+    let output = ingestion::ingest(home.path(), "Notes", &[path_argument(&vault)?], false, None)?;
 
     assert_eq!(output, "added 2 files to collection \"Notes\"");
 
@@ -48,18 +51,18 @@ fn adds_a_single_file() -> Result<(), Box<dyn Error>> {
     let file = home.path().join("notes.md");
     fs::write(&file, "content")?;
 
-    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
-
-    let output = run(
+    run(
         [
             "mdsearch",
             "collection",
-            "add",
+            "create",
             "Notes",
-            path_argument(&file)?,
+            home.path().to_str().ok_or("UTF-8 fixture path required")?,
         ],
         home.path(),
     )?;
+
+    let output = ingestion::ingest(home.path(), "Notes", &[path_argument(&file)?], false, None)?;
 
     assert_eq!(output, "added 1 file to collection \"Notes\"");
 
@@ -73,28 +76,19 @@ fn re_adding_a_file_reports_one_file() -> Result<(), Box<dyn Error>> {
     let file = home.path().join("notes.md");
     fs::write(&file, "content")?;
 
-    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
     run(
         [
             "mdsearch",
             "collection",
-            "add",
+            "create",
             "Notes",
-            path_argument(&file)?,
+            home.path().to_str().ok_or("UTF-8 fixture path required")?,
         ],
         home.path(),
     )?;
+    ingestion::ingest(home.path(), "Notes", &[path_argument(&file)?], false, None)?;
 
-    let output = run(
-        [
-            "mdsearch",
-            "collection",
-            "add",
-            "Notes",
-            path_argument(&file)?,
-        ],
-        home.path(),
-    )?;
+    let output = ingestion::ingest(home.path(), "Notes", &[path_argument(&file)?], false, None)?;
 
     assert_eq!(output, "added 1 file to collection \"Notes\"");
 
@@ -105,18 +99,24 @@ fn re_adding_a_file_reports_one_file() -> Result<(), Box<dyn Error>> {
 #[test]
 fn fails_when_a_path_is_unreadable() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
-    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
-    let missing = home.path().join("missing.md");
-
-    let error = run(
+    run(
         [
             "mdsearch",
             "collection",
-            "add",
+            "create",
             "Notes",
-            path_argument(&missing)?,
+            home.path().to_str().ok_or("UTF-8 fixture path required")?,
         ],
         home.path(),
+    )?;
+    let missing = home.path().join("missing.md");
+
+    let error = ingestion::ingest(
+        home.path(),
+        "Notes",
+        &[path_argument(&missing)?],
+        false,
+        None,
     )
     .err()
     .ok_or_else(|| std::io::Error::other("an unreadable path should fail"))?;
@@ -134,19 +134,23 @@ fn skips_unreadable_paths_with_skip_switch() -> Result<(), Box<dyn Error>> {
     fs::write(&file, "content")?;
     let missing = home.path().join("missing.md");
 
-    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
-
-    let output = run(
+    run(
         [
             "mdsearch",
             "collection",
-            "add",
+            "create",
             "Notes",
-            path_argument(&missing)?,
-            path_argument(&file)?,
-            "--skip-unreadable",
+            home.path().to_str().ok_or("UTF-8 fixture path required")?,
         ],
         home.path(),
+    )?;
+
+    let output = ingestion::ingest(
+        home.path(),
+        "Notes",
+        &[path_argument(&missing)?, path_argument(&file)?],
+        true,
+        None,
     )?;
 
     assert_eq!(output, "added 1 file to collection \"Notes\" (skipped 1)");
@@ -160,20 +164,20 @@ fn reports_a_missing_collection() -> Result<(), Box<dyn Error>> {
     let home = tempdir()?;
     let file = home.path().join("notes.md");
     fs::write(&file, "content")?;
-    run(["mdsearch", "collection", "create", "Other"], home.path())?;
-
-    let error = run(
+    run(
         [
             "mdsearch",
             "collection",
-            "add",
-            "Notes",
-            path_argument(&file)?,
+            "create",
+            "Other",
+            home.path().to_str().ok_or("UTF-8 fixture path required")?,
         ],
         home.path(),
-    )
-    .err()
-    .ok_or_else(|| std::io::Error::other("a missing collection should fail"))?;
+    )?;
+
+    let error = ingestion::ingest(home.path(), "Notes", &[path_argument(&file)?], false, None)
+        .err()
+        .ok_or_else(|| std::io::Error::other("a missing collection should fail"))?;
 
     assert!(error.to_string().contains("not found"));
 
@@ -189,17 +193,12 @@ fn reports_a_missing_database_without_creating_it() -> Result<(), Box<dyn Error>
     let database_path = home.path().join("custom").join("collections.db");
     let database_argument = path_argument(&database_path)?;
 
-    let error = run(
-        [
-            "mdsearch",
-            "collection",
-            "add",
-            "Notes",
-            path_argument(&file)?,
-            "--database",
-            database_argument,
-        ],
+    let error = ingestion::ingest(
         home.path(),
+        "Notes",
+        &[path_argument(&file)?],
+        false,
+        Some(database_argument),
     )
     .err()
     .ok_or_else(|| std::io::Error::other("a missing database should fail"))?;
@@ -225,23 +224,19 @@ fn adds_files_to_an_explicit_database() -> Result<(), Box<dyn Error>> {
             "collection",
             "create",
             "Notes",
+            home.path().to_str().ok_or("UTF-8 fixture path required")?,
             "--database",
             database_argument,
         ],
         home.path(),
     )?;
 
-    let output = run(
-        [
-            "mdsearch",
-            "collection",
-            "add",
-            "Notes",
-            path_argument(&file)?,
-            "--database",
-            database_argument,
-        ],
+    let output = ingestion::ingest(
         home.path(),
+        "Notes",
+        &[path_argument(&file)?],
+        false,
+        Some(database_argument),
     )?;
 
     assert_eq!(output, "added 1 file to collection \"Notes\"");

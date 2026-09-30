@@ -6,17 +6,15 @@ use std::process::Command;
 
 use tempfile::tempdir;
 
-use kv_app::run;
+mod common;
+use common::run;
 use kv_application::FileRecord;
 use kv_application::{CollectionStore, FileStore};
 use kv_domain::{CollectionName, Timestamp};
 use kv_store_sqlite::{SqliteCollectionStore, SqliteFileStore};
 
 fn update(home: &std::path::Path, name: &str) -> Result<String, kv_app::AppError> {
-    run(
-        ["mdsearch", "collection", "update", "--collection", name],
-        home,
-    )
+    run(["mdsearch", "update", "--collection", name], home)
 }
 
 /// Covers: REQ-021 FR-004, FR-006 — updates discover newly added files from saved sources.
@@ -153,9 +151,12 @@ fn update_all_reports_all_collections_when_one_has_no_sources() -> Result<(), Bo
         ],
         home.path(),
     )?;
-    run(["mdsearch", "collection", "create", "Legacy"], home.path())?;
+    SqliteCollectionStore::open(&home.path().join(".mdsearch/collections.db"))?.create_collection(
+        &CollectionName::try_from("Legacy")?,
+        Timestamp::from_unix_seconds(42),
+    )?;
 
-    let error = run(["mdsearch", "collection", "update", "--all"], home.path())
+    let error = run(["mdsearch", "update", "--all"], home.path())
         .err()
         .ok_or("expected partial failure")?;
     let report = error.to_string();
@@ -222,10 +223,13 @@ fn update_all_binary_reports_partial_failure_and_nonzero_exit() -> Result<(), Bo
         ],
         home.path(),
     )?;
-    run(["mdsearch", "collection", "create", "Legacy"], home.path())?;
+    SqliteCollectionStore::open(&home.path().join(".mdsearch/collections.db"))?.create_collection(
+        &CollectionName::try_from("Legacy")?,
+        Timestamp::from_unix_seconds(42),
+    )?;
 
     let output = Command::new(env!("CARGO_BIN_EXE_mdsearch"))
-        .args(["collection", "update", "--all"])
+        .args(["update", "--all"])
         .env("HOME", home.path())
         .output()?;
     let stderr = String::from_utf8(output.stderr)?;

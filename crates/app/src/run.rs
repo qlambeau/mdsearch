@@ -5,33 +5,28 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use kv_application::{
-    AddFiles, Clock, CollectionSourceStore, CreateCollection, DestroyCollection, EmbedCollections,
-    EmbedScope, EmbeddingGenerator, FileSystem, GetFile, GraphStore, HybridResult, HybridSearch,
-    ListCollections, ReadIndexStatus, Reranker, SearchLexical, SearchResult, SearchScope,
-    SemanticIndexStore, SemanticUpdateCoordinator, SemanticUpdatePorts, UpdateOutcome,
+    Clock, CollectionSourceStore, CreateCollection, DestroyCollection, FileSystem, GetFile,
+    GraphStore, HybridResult, HybridSearch, ListCollections, ReadIndexStatus, SearchLexical,
+    SearchResult, SearchScope, SemanticIndexStore, SemanticUpdateCoordinator, SemanticUpdatePorts,
+    UpdateOutcome,
 };
-use kv_domain::{CollectionName, EmbeddingModel, EntityKind, NodeId, RerankerModel};
-use kv_embed_fastembed::{FastembedGenerator, FastembedReranker};
+use kv_domain::{CollectionName, EntityKind, NodeId};
 use kv_infrastructure::{SystemClock, SystemFileSystem};
 use kv_store_sqlite::{
     SqliteCollectionStore, SqliteFileRetrievalStore, SqliteFileStore, SqliteGraphStore,
-    SqliteHybridSearchStore, SqliteLexicalIndexStore, SqliteLexicalSearchStore,
+    SqliteHybridSearchStore, SqliteIndexInspectionStore, SqliteLexicalSearchStore,
     SqliteSemanticIndexStore,
 };
 
-use crate::AppError;
 use crate::cli::{
-    Cli, CollectionCommand, Command, GraphCommand, HybridArgs, IndexCommand, ModelCommand,
-    SearchArgs,
+    Cli, CollectionCommand, Command, GraphCommand, ModelCommand, SearchArgs, SearchMode,
 };
-use crate::graph_query::{build_schema, handle};
+use crate::graph_query::build_schema;
 use crate::model_cache;
-use crate::progress;
+use crate::models::{model_list, model_set};
 use crate::related::{RelatedFile, related_files};
-use crate::rendering::{
-    render_embed_report, render_human, render_hybrid_human, render_hybrid_json,
-    render_index_status, render_json,
-};
+use crate::rendering::{render_human, render_hybrid_human, render_hybrid_json, render_json};
+use crate::{AppError, CommandOutput};
 
 /// Executes one `mdsearch` CLI invocation with an injected home directory.
 ///
@@ -46,7 +41,7 @@ use crate::rendering::{
 /// let output = kv_app::run(["mdsearch", "--version"], std::path::Path::new("."))?;
 /// # Ok::<(), kv_app::AppError>(())
 /// ```
-pub fn run<I, T>(args: I, home_directory: &Path) -> Result<String, AppError>
+pub fn run<I, T>(args: I, home_directory: &Path) -> Result<CommandOutput, AppError>
 where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
@@ -68,30 +63,14 @@ where
 /// let output = kv_app::run_from_environment(std::env::args_os())?;
 /// # Ok::<(), kv_app::AppError>(())
 /// ```
-pub fn run_from_environment<I, T>(args: I) -> Result<String, AppError>
+pub fn run_from_environment<I, T>(args: I) -> Result<CommandOutput, AppError>
 where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
 {
     let cli = Cli::try_parse_from(args)?;
-    let uses_default_database = cli.database.is_none();
     let model_cache_environment = model_cache::ModelCacheEnvironment::from_process();
-    let uses_default_model_cache = matches!(
-        &cli.command,
-        Command::Embed(_)
-            | Command::Hybrid(_)
-            | Command::Model(_)
-            | Command::Collection(CollectionCommand::Update(_))
-    ) && model_cache_environment.needs_home();
-    let home_directory = if uses_default_database || uses_default_model_cache {
-        Some(
-            env::var_os("HOME")
-                .map(PathBuf::from)
-                .ok_or(AppError::HomeUnavailable)?,
-        )
-    } else {
-        None
-    };
+    let home_directory = env::var_os("HOME").map(PathBuf::from);
 
     run_cli(cli, home_directory.as_deref(), &model_cache_environment)
 }
@@ -100,140 +79,147 @@ fn run_cli(
     cli: Cli,
     home_directory: Option<&Path>,
     model_cache_environment: &model_cache::ModelCacheEnvironment,
-) -> Result<String, AppError> {
+) -> Result<CommandOutput, AppError> {
     let database = cli.database;
-
-    match cli.command {
-        Command::Collection(command) => {
-            collection_command(command, database, home_directory, model_cache_environment)
-        }
-        Command::Index(IndexCommand::Status(_)) => index_status(database, home_directory),
-        Command::Search(arguments) => search(&arguments, database, home_directory),
-        Command::Get(arguments) => get_file(
-            &arguments.collection,
-            &arguments.name_or_id,
+    let result = match cli.command {
+        Command::Collection(command) => collection_command(command, database, home_directory),
+        Command::Update(arguments) => update_command(
+            &arguments,
             database,
-            home_directory,
-        ),
-        Command::Embed(arguments) => embed(
-            arguments.collection.as_deref(),
-            arguments.model.as_deref(),
-            arguments.reranker.as_deref(),
-            arguments.download,
-            database.clone(),
             home_directory,
             model_cache_environment,
         ),
+        Command::Status(arguments) => index_status(&arguments, database, home_directory),
+        Command::Search(arguments) => {
+            if arguments.no_rerank && arguments.mode == SearchMode::Lexical {
+                return Err(AppError::Arguments(clap::Error::raw(
+                    clap::error::ErrorKind::ArgumentConflict,
+                    "--no-rerank requires --mode hybrid",
+                )));
+            }
+            match arguments.mode {
+                SearchMode::Lexical => search(&arguments, database, home_directory),
+                SearchMode::Hybrid => hybrid(
+                    &arguments,
+                    database,
+                    home_directory,
+                    model_cache_environment,
+                ),
+            }
+        }
+        Command::Get(arguments) => {
+            let collection = CollectionName::try_from(arguments.collection.as_str())?;
+            let path = database_path(database, home_directory)?;
+            let use_case = GetFile::new(SqliteFileRetrievalStore::open(&path)?);
+            let selector = match arguments.id {
+                Some(id) => kv_application::FileSelector::Id(
+                    kv_domain::FileId::try_new(id)
+                        .map_err(|error| AppError::Model(error.to_string()))?,
+                ),
+                None => kv_application::FileSelector::Name(
+                    arguments.path_or_name.as_deref().ok_or_else(|| {
+                        AppError::Arguments(clap::Error::new(
+                            clap::error::ErrorKind::MissingRequiredArgument,
+                        ))
+                    })?,
+                ),
+            };
+            return Ok(CommandOutput::Content(
+                use_case.execute(&collection, selector)?.content().to_vec(),
+            ));
+        }
         Command::Model(ModelCommand::List(arguments)) => model_list(
             arguments.json,
-            database.clone(),
+            database,
             home_directory,
             model_cache_environment,
         ),
         Command::Model(ModelCommand::Set(arguments)) => model_set(
-            arguments.model.as_deref(),
-            arguments.reranker.as_deref(),
-            arguments.download,
-            database.clone(),
-            home_directory,
-            model_cache_environment,
-        ),
-        Command::Hybrid(arguments) => hybrid(
             &arguments,
-            database.clone(),
+            database,
             home_directory,
             model_cache_environment,
         ),
-        Command::Graph(GraphCommand::Neighbors(arguments)) => graph_neighbors(
-            &arguments.node,
-            arguments.collection.as_deref(),
-            database.clone(),
-            home_directory,
-        ),
-        Command::Context(arguments) => context(
+        Command::Graph(GraphCommand::Neighbors(arguments)) => {
+            graph_neighbors(&arguments, database, home_directory)
+        }
+        Command::Graph(GraphCommand::Query(arguments)) => context(
             &arguments.query,
             &arguments.collection,
             database,
             home_directory,
         ),
-    }
+    };
+    result.map(CommandOutput::Report)
 }
 
 fn collection_command(
     command: CollectionCommand,
     database: Option<PathBuf>,
     home_directory: Option<&Path>,
-    model_cache_environment: &model_cache::ModelCacheEnvironment,
 ) -> Result<String, AppError> {
     match command {
-        CollectionCommand::Create(arguments) => create_collection(
-            &arguments.name,
-            &arguments.paths,
-            arguments.semantic,
+        CollectionCommand::Create(args) => create_collection(
+            &args.name,
+            &args.paths,
+            args.semantic,
             database,
             home_directory,
         ),
-        CollectionCommand::List(arguments) => {
-            list_collections(arguments.json, database, home_directory)
-        }
-        CollectionCommand::Configure(arguments) => configure_collection(
-            &arguments.name,
-            &arguments.paths,
-            arguments.semantic.as_deref(),
+        CollectionCommand::List(args) => list_collections(args.json, database, home_directory),
+        CollectionCommand::Configure(args) => configure_collection(
+            &args.name,
+            &args.paths,
+            args.semantic.as_deref(),
             database,
             home_directory,
         ),
-        CollectionCommand::Destroy(arguments) => {
-            destroy_collection(&arguments.name, database, home_directory)
-        }
-        CollectionCommand::Add(arguments) => add_files(
-            &arguments.name,
-            &arguments.paths,
-            database,
-            arguments.skip_unreadable,
-            home_directory,
-        ),
-        CollectionCommand::Update(arguments) => update_command(
-            &arguments,
-            database,
-            home_directory,
-            model_cache_environment,
-        ),
+        CollectionCommand::Delete(args) => destroy_collection(&args.name, database, home_directory),
     }
 }
 
 fn update_command(
-    arguments: &crate::cli::UpdateCollectionArgs,
+    args: &crate::cli::UpdateCollectionArgs,
     database: Option<PathBuf>,
     home_directory: Option<&Path>,
-    model_cache_environment: &model_cache::ModelCacheEnvironment,
+    environment: &model_cache::ModelCacheEnvironment,
 ) -> Result<String, AppError> {
-    if arguments.all {
-        return update_all_collections(
-            database,
-            arguments.skip_unreadable,
-            arguments.download,
-            home_directory,
-            model_cache_environment,
-        );
+    let path = database_path(database, home_directory)?;
+    migrate_existing_database(&path)?;
+    let store = SqliteCollectionStore::open_existing(&path)?;
+    let names = match args.scope.name.as_deref() {
+        Some(name) => vec![CollectionName::try_from(name)?],
+        None => ListCollections::new(store).execute()?,
+    };
+    let mut failed = false;
+    let mut entries = Vec::new();
+    let mut lines = Vec::new();
+    for name in names {
+        match update_collection(&name, args, &path, home_directory, environment) {
+            Ok(outcome) => {
+                lines.push(format_update(name.display_name(), &outcome));
+                entries.push(serde_json::json!({"name":name.display_name(), "success":true, "added":outcome.added(), "modified":outcome.modified(), "deleted":outcome.deleted(), "skipped":outcome.skipped(), "malformed_frontmatter":outcome.malformed_frontmatter()}));
+            }
+            Err(error) => {
+                failed = true;
+                lines.push(format!(
+                    "update failed for collection \"{}\": {error}",
+                    name.display_name()
+                ));
+                entries.push(serde_json::json!({"name":name.display_name(), "success":false, "diagnostic":error.to_string()}));
+            }
+        }
     }
-    let name = arguments
-        .name
-        .as_deref()
-        .or(arguments.legacy_name.as_deref())
-        .ok_or_else(|| {
-            AppError::Arguments(clap::Error::new(
-                clap::error::ErrorKind::MissingRequiredArgument,
-            ))
-        })?;
-    update_collection(
-        name,
-        database,
-        arguments.skip_unreadable,
-        home_directory,
-        arguments.download,
-        model_cache_environment,
-    )
+    let report = if args.json {
+        serde_json::json!({"collections":entries}).to_string()
+    } else {
+        lines.join("\n")
+    };
+    if failed {
+        Err(AppError::UpdateReportFailed(report))
+    } else {
+        Ok(report)
+    }
 }
 
 fn create_collection(
@@ -272,12 +258,12 @@ fn list_collections(
     home_directory: Option<&Path>,
 ) -> Result<String, AppError> {
     let database_path = database_path(database_override, home_directory)?;
-    migrate_existing_database(&database_path)?;
     let store = SqliteCollectionStore::open_existing(&database_path)?;
     let collections = store.list_collections_with_sources()?;
     if json {
         let value = serde_json::json!({"collections": collections.iter().map(|entry| serde_json::json!({
             "name": entry.name.display_name(),
+            "indexes": {"lexical":true, "graph":true, "semantic":entry.semantic_enabled},
             "sources": entry.sources.iter().map(|source| source.path().to_string_lossy()).collect::<Vec<_>>(),
         })).collect::<Vec<_>>()});
         return serde_json::to_string(&value)
@@ -287,11 +273,24 @@ fn list_collections(
         .iter()
         .map(|entry| {
             if entry.sources.is_empty() {
-                entry.name.display_name().to_owned()
+                format!(
+                    "{} [lexical, graph{}]",
+                    entry.name.display_name(),
+                    if entry.semantic_enabled {
+                        ", semantic"
+                    } else {
+                        ""
+                    }
+                )
             } else {
                 format!(
-                    "{}\n  {}",
+                    "{} [lexical, graph{}]\n  {}",
                     entry.name.display_name(),
+                    if entry.semantic_enabled {
+                        ", semantic"
+                    } else {
+                        ""
+                    },
                     entry
                         .sources
                         .iter()
@@ -363,124 +362,31 @@ fn destroy_collection(
     ))
 }
 
-fn add_files(
-    raw_name: &str,
-    paths: &[PathBuf],
-    database_override: Option<PathBuf>,
-    force: bool,
-    home_directory: Option<&Path>,
-) -> Result<String, AppError> {
-    let name = CollectionName::try_from(raw_name)?;
-    let database_path = database_path(database_override, home_directory)?;
-    let store = SqliteFileStore::open_for_ingestion(&database_path)?;
-    let mut use_case = AddFiles::new(SystemFileSystem, store, SystemClock);
-    let outcome = use_case.execute(&name, paths, force)?;
-
-    let file_label = if outcome.added() == 1 {
-        "file"
-    } else {
-        "files"
-    };
-    let mut message = format!(
-        "added {} {} to collection \"{}\"",
-        outcome.added(),
-        file_label,
-        name.display_name()
-    );
-    if outcome.skipped() > 0 {
-        // Writing to a `String` cannot fail.
-        let _ = write!(message, " (skipped {})", outcome.skipped());
-    }
-
-    Ok(message)
-}
-
 fn update_collection(
-    raw_name: &str,
-    database_override: Option<PathBuf>,
-    force: bool,
+    name: &CollectionName,
+    args: &crate::cli::UpdateCollectionArgs,
+    database_path: &Path,
     home_directory: Option<&Path>,
-    download: bool,
     model_cache_environment: &model_cache::ModelCacheEnvironment,
-) -> Result<String, AppError> {
-    let name = CollectionName::try_from(raw_name)?;
-    let database_path = database_path(database_override, home_directory)?;
-    let sources_store = SqliteCollectionStore::open_existing(&database_path)?;
-    let sources = sources_store.collection_sources(&name)?;
+) -> Result<UpdateOutcome, AppError> {
+    let sources_store = SqliteCollectionStore::open_existing(database_path)?;
+    let sources = sources_store.collection_sources(name)?;
     if sources.is_empty() {
         return Err(AppError::NoRegisteredSources(
             name.display_name().to_owned(),
         ));
     }
     let files = expand_sources(&sources)?;
-    let store = SqliteFileStore::open_for_ingestion(&database_path)?;
-    let cache_dir = model_cache::model_cache_dir(home_directory, model_cache_environment)
-        .ok_or(AppError::HomeUnavailable)?;
-    let ports = SemanticUpdatePorts::new(
-        SystemFileSystem,
-        store,
-        FastembedGenerator::new(cache_dir),
-        SystemClock,
-    );
+    let store = SqliteFileStore::open_for_ingestion(database_path)?;
+    let generator = crate::model_assets::ModelGenerator::new(model_cache::model_cache_dir(
+        home_directory,
+        model_cache_environment,
+    ));
+    let ports = SemanticUpdatePorts::new(SystemFileSystem, store, generator, SystemClock);
     let mut coordinator = SemanticUpdateCoordinator::new(ports);
-    let outcome = coordinator.execute(&name, &files, force, download)?;
+    let outcome = coordinator.execute(name, &files, args.skip_unreadable, args.download)?;
 
-    Ok(format_update(name.display_name(), &outcome))
-}
-
-fn update_all_collections(
-    database_override: Option<PathBuf>,
-    force: bool,
-    download: bool,
-    home_directory: Option<&Path>,
-    model_cache_environment: &model_cache::ModelCacheEnvironment,
-) -> Result<String, AppError> {
-    let database_path = database_path(database_override, home_directory)?;
-    migrate_existing_database(&database_path)?;
-    let collection_store = SqliteCollectionStore::open_existing(&database_path)?;
-    let summaries = collection_store.list_collections_with_sources()?;
-    drop(collection_store);
-    let mut lines = Vec::new();
-    let mut failures = Vec::new();
-    for summary in &summaries {
-        let result = if summary.sources.is_empty() {
-            Err(AppError::NoRegisteredSources(
-                summary.name.display_name().to_owned(),
-            ))
-        } else {
-            expand_sources(&summary.sources).and_then(|files| {
-                let store = SqliteFileStore::open_for_ingestion(&database_path)?;
-                let cache_dir =
-                    model_cache::model_cache_dir(home_directory, model_cache_environment)
-                        .ok_or(AppError::HomeUnavailable)?;
-                let ports = SemanticUpdatePorts::new(
-                    SystemFileSystem,
-                    store,
-                    FastembedGenerator::new(cache_dir),
-                    SystemClock,
-                );
-                let mut coordinator = SemanticUpdateCoordinator::new(ports);
-                let outcome = coordinator.execute(&summary.name, &files, force, download)?;
-                Ok(format_update(summary.name.display_name(), &outcome))
-            })
-        };
-        match result {
-            Ok(line) => lines.push(line),
-            Err(error) => {
-                let line = format!(
-                    "update failed for collection \"{}\": {error}",
-                    summary.name.display_name()
-                );
-                lines.push(line.clone());
-                failures.push(line);
-            }
-        }
-    }
-    if failures.is_empty() {
-        Ok(lines.join("\n"))
-    } else {
-        Err(AppError::UpdateAllFailed(lines.join("\n")))
-    }
+    Ok(outcome)
 }
 
 fn expand_sources(sources: &[kv_domain::CollectionSource]) -> Result<Vec<PathBuf>, AppError> {
@@ -504,19 +410,19 @@ fn migrate_existing_database(database_path: &Path) -> Result<(), AppError> {
 }
 
 fn index_status(
+    args: &crate::cli::IndexStatusArgs,
     database_override: Option<PathBuf>,
     home_directory: Option<&Path>,
 ) -> Result<String, AppError> {
-    let database_path = database_path(database_override, home_directory)?;
-    let store = SqliteLexicalIndexStore::open(&database_path)?;
-    let use_case = ReadIndexStatus::new(store);
-    let statuses = use_case.execute()?;
-
-    Ok(statuses
-        .iter()
-        .map(render_index_status)
-        .collect::<Vec<_>>()
-        .join("\n"))
+    let path = database_path(database_override, home_directory)?;
+    let scope = args
+        .collection
+        .as_deref()
+        .map(CollectionName::try_from)
+        .transpose()?;
+    let report =
+        ReadIndexStatus::new(SqliteIndexInspectionStore::open(&path)?).inspect(scope.as_ref())?;
+    Ok(crate::status_rendering::render(&report, args.json))
 }
 
 fn search(
@@ -524,7 +430,8 @@ fn search(
     database_override: Option<PathBuf>,
     home_directory: Option<&Path>,
 ) -> Result<String, AppError> {
-    if args.query.trim().is_empty() {
+    let query = args.query.join(" ");
+    if query.trim().is_empty() {
         return Err(AppError::Search(kv_application::SearchError::EmptyQuery));
     }
 
@@ -542,7 +449,7 @@ fn search(
         None => SearchScope::All,
     };
 
-    let set = use_case.execute(&args.query, usize::from(args.limit), scope)?;
+    let set = use_case.execute(&query, usize::from(args.limit), scope)?;
 
     let related_context = if args.related {
         let graph_store = SqliteGraphStore::open(&database_path)?;
@@ -559,7 +466,7 @@ fn search(
     if args.json {
         Ok(render_json(
             &set,
-            &args.query,
+            &query,
             &scope_name,
             args.limit,
             related_context.as_deref(),
@@ -570,20 +477,20 @@ fn search(
 }
 
 fn hybrid(
-    args: &HybridArgs,
+    args: &SearchArgs,
     database_override: Option<PathBuf>,
     home_directory: Option<&Path>,
     model_cache_environment: &model_cache::ModelCacheEnvironment,
 ) -> Result<String, AppError> {
-    if args.query.trim().is_empty() {
+    let query = args.query.join(" ");
+    if query.trim().is_empty() {
         return Err(AppError::Hybrid(kv_application::HybridError::EmptyQuery));
     }
 
     let database_path = database_path(database_override, home_directory)?;
-    let cache_dir = model_cache::model_cache_dir(home_directory, model_cache_environment)
-        .ok_or(AppError::HomeUnavailable)?;
-    let generator = FastembedGenerator::new(cache_dir.clone());
-    let reranker = FastembedReranker::new(cache_dir);
+    let cache_dir = model_cache::model_cache_dir(home_directory, model_cache_environment);
+    let generator = crate::model_assets::ModelGenerator::new(cache_dir.clone());
+    let reranker = crate::model_assets::ModelReranker::new(cache_dir);
     let store = SqliteHybridSearchStore::open(&database_path)?;
     let use_case = HybridSearch::new(generator, store, reranker);
 
@@ -597,7 +504,9 @@ fn hybrid(
         None => SearchScope::All,
     };
 
-    let set = use_case.execute(&args.query, usize::from(args.limit), scope, !args.no_rerank)?;
+    let set = use_case
+        .execute(&query, usize::from(args.limit), scope, !args.no_rerank)
+        .map_err(|error| crate::recovery::hybrid(error, &database_path, collection.as_ref()))?;
 
     let related_context = if args.related {
         let graph_store = SqliteGraphStore::open(&database_path)?;
@@ -614,7 +523,7 @@ fn hybrid(
     let rendered = if args.json {
         render_hybrid_json(
             &set,
-            &args.query,
+            &query,
             &scope_name,
             args.limit,
             related_context.as_deref(),
@@ -626,61 +535,38 @@ fn hybrid(
     Ok(rendered)
 }
 
-fn get_file(
-    raw_collection: &str,
-    name_or_id: &str,
-    database_override: Option<PathBuf>,
-    home_directory: Option<&Path>,
-) -> Result<String, AppError> {
-    let collection = CollectionName::try_from(raw_collection)?;
-    let database_path = database_path(database_override, home_directory)?;
-    let store = SqliteFileRetrievalStore::open(&database_path)?;
-    let use_case = GetFile::new(store);
-    let file = use_case.execute(&collection, name_or_id)?;
-
-    String::from_utf8(file.content().to_vec()).map_err(|_| AppError::NonUtf8Content)
-}
-
 fn graph_neighbors(
-    raw_node: &str,
-    collection_name: Option<&str>,
+    args: &crate::cli::GraphNeighborsArgs,
     database_override: Option<PathBuf>,
     home_directory: Option<&Path>,
 ) -> Result<String, AppError> {
     let database_path = database_path(database_override, home_directory)?;
     let store = SqliteGraphStore::open(&database_path)?;
-
-    let collections: Vec<CollectionName> = if let Some(name) = collection_name {
-        vec![CollectionName::try_from(name)?]
-    } else {
-        let collection_store = SqliteCollectionStore::open_existing(&database_path)?;
-        ListCollections::new(collection_store).execute()?
-    };
-
-    let mut lines = Vec::new();
-    for collection in &collections {
-        for kind in [EntityKind::File, EntityKind::Tag, EntityKind::Alias] {
-            let id = NodeId::new(kind, raw_node.to_owned());
-            if store.node(collection, &id)?.is_none() {
-                continue;
-            }
-            let neighbors = store.neighbors(collection, &id, None, 3)?;
-            lines.push(format!("{}:", id.key()));
-            for neighbor in neighbors {
-                lines.push(format!(
-                    "  {} {} (depth {})",
-                    neighbor.relation().as_str(),
-                    neighbor.node().id().key(),
-                    neighbor.depth()
-                ));
-            }
-            return Ok(lines.join("\n"));
-        }
+    let collection = CollectionName::try_from(args.collection.as_str())?;
+    let kind = EntityKind::from_key(&args.kind)
+        .ok_or_else(|| AppError::GraphQuery("unknown node kind".to_owned()))?;
+    let relation = args
+        .relation
+        .as_deref()
+        .and_then(kv_domain::RelationKind::from_key);
+    let id = NodeId::new(kind, args.node.clone());
+    if store.node(&collection, &id)?.is_none() {
+        return Err(AppError::Graph(kv_application::GraphStoreError::Storage(
+            format!("node not found: {} {}", args.kind, args.node).into(),
+        )));
     }
-
-    Err(AppError::Graph(kv_application::GraphStoreError::Storage(
-        format!("node not found: {raw_node}").into(),
-    )))
+    let mut lines = vec![format!("{} {}:", kind.as_str(), args.node)];
+    for neighbor in store.neighbors(&collection, &id, relation, args.depth)? {
+        lines.push(format!(
+            "  {} {} {} — {} (depth {})",
+            neighbor.relation().as_str(),
+            neighbor.node().id().kind().as_str(),
+            neighbor.node().id().key(),
+            neighbor.node().title(),
+            neighbor.depth()
+        ));
+    }
+    Ok(lines.join("\n"))
 }
 
 /// Executes an in-process GraphQL query against the entity graph and prints the
@@ -694,10 +580,11 @@ fn context(
     database_override: Option<PathBuf>,
     home_directory: Option<&Path>,
 ) -> Result<String, AppError> {
-    let _collection = CollectionName::try_from(collection_name)?;
+    let collection = CollectionName::try_from(collection_name)?;
     let database_path = database_path(database_override, home_directory)?;
     let store = SqliteGraphStore::open(&database_path)?;
-    let schema = build_schema(handle(store));
+    SqliteCollectionStore::open_existing(&database_path)?.collection_sources(&collection)?;
+    let schema = build_schema(store, collection);
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
@@ -754,145 +641,6 @@ where
         .collect()
 }
 
-fn embed(
-    collection_name: Option<&str>,
-    model_name: Option<&str>,
-    reranker_name: Option<&str>,
-    download: bool,
-    database_override: Option<PathBuf>,
-    home_directory: Option<&Path>,
-    model_cache_environment: &model_cache::ModelCacheEnvironment,
-) -> Result<String, AppError> {
-    let database_path = database_path(database_override, home_directory)?;
-    let cache_dir = model_cache::model_cache_dir(home_directory, model_cache_environment)
-        .ok_or(AppError::HomeUnavailable)?;
-    let generator = FastembedGenerator::new(cache_dir.clone());
-    let reranker = FastembedReranker::new(cache_dir);
-    let store = SqliteSemanticIndexStore::open_for_embedding(&database_path)?;
-    let mut use_case = EmbedCollections::new(generator, store, SystemClock, reranker);
-
-    let model = model_name.map(EmbeddingModel::try_from).transpose()?;
-    let reranker = reranker_name.map(RerankerModel::try_from).transpose()?;
-    let collection = collection_name.map(CollectionName::try_from).transpose()?;
-    let scope = match collection.as_ref() {
-        Some(collection) => EmbedScope::Collection(collection),
-        None => EmbedScope::All,
-    };
-
-    let mut progress_view = progress::ProgressRenderer::default();
-    let report = use_case.execute(
-        scope,
-        model.as_ref(),
-        reranker.as_ref(),
-        download,
-        &mut |event| {
-            progress_view.handle(event);
-        },
-    )?;
-    progress_view.finish();
-
-    let rendered = render_embed_report(&report);
-    if report.any_failed() {
-        Err(AppError::EmbedPartial(rendered))
-    } else {
-        Ok(rendered)
-    }
-}
-
-fn model_list(
-    json: bool,
-    _database_override: Option<PathBuf>,
-    home_directory: Option<&Path>,
-    model_cache_environment: &model_cache::ModelCacheEnvironment,
-) -> Result<String, AppError> {
-    let cache_dir = model_cache::model_cache_dir(home_directory, model_cache_environment)
-        .ok_or(AppError::HomeUnavailable)?;
-    let generator = FastembedGenerator::new(cache_dir.clone());
-    let reranker = FastembedReranker::new(cache_dir);
-    let embeddings = generator.models();
-    let rerankers = reranker.models();
-
-    if json {
-        let value = serde_json::json!({
-            "embedding": embeddings.iter().map(|model| serde_json::json!({
-                "name": model.name(), "available": model.available()
-            })).collect::<Vec<_>>(),
-            "reranker": rerankers.iter().map(|model| serde_json::json!({
-                "name": model.name(), "available": model.available()
-            })).collect::<Vec<_>>(),
-        });
-        return serde_json::to_string(&value)
-            .map_err(|error| AppError::GraphQuery(error.to_string()));
-    }
-
-    let mut lines = embeddings
-        .iter()
-        .map(|model| {
-            format!(
-                "embedding {}: {}",
-                model.name(),
-                model_state(model.available())
-            )
-        })
-        .collect::<Vec<_>>();
-    lines.extend(rerankers.iter().map(|model| {
-        format!(
-            "reranker {}: {}",
-            model.name(),
-            model_state(model.available())
-        )
-    }));
-    Ok(lines.join("\n"))
-}
-
-fn model_state(available: bool) -> &'static str {
-    if available {
-        "available"
-    } else {
-        "not downloaded"
-    }
-}
-
-fn model_set(
-    model_name: Option<&str>,
-    reranker_name: Option<&str>,
-    download: bool,
-    database_override: Option<PathBuf>,
-    home_directory: Option<&Path>,
-    model_cache_environment: &model_cache::ModelCacheEnvironment,
-) -> Result<String, AppError> {
-    if model_name.is_none() && reranker_name.is_none() {
-        return Err(AppError::Arguments(clap::Error::new(
-            clap::error::ErrorKind::MissingRequiredArgument,
-        )));
-    }
-    let cache_dir = model_cache::model_cache_dir(home_directory, model_cache_environment)
-        .ok_or(AppError::HomeUnavailable)?;
-    let generator = FastembedGenerator::new(cache_dir.clone());
-    let reranker = FastembedReranker::new(cache_dir);
-    if let Some(raw_model) = model_name {
-        let model = EmbeddingModel::try_from(raw_model)?;
-        generator
-            .ensure_available(&model, download)
-            .map_err(|error| AppError::Model(error.to_string()))?;
-    }
-    if let Some(raw_reranker) = reranker_name {
-        let reranker_model = RerankerModel::try_from(raw_reranker)?;
-        reranker
-            .ensure_available(&reranker_model, download)
-            .map_err(|error| AppError::Model(error.to_string()))?;
-    }
-    embed(
-        None,
-        model_name,
-        reranker_name,
-        download,
-        database_override,
-        home_directory,
-        model_cache_environment,
-    )
-}
-
 fn format_update(display_name: &str, outcome: &UpdateOutcome) -> String {
     let mut line = format!(
         "updated collection \"{display_name}\": added {}, modified {}, deleted {}",
@@ -915,7 +663,7 @@ fn format_update(display_name: &str, outcome: &UpdateOutcome) -> String {
     line
 }
 
-fn database_path(
+pub(super) fn database_path(
     database_override: Option<PathBuf>,
     home_directory: Option<&Path>,
 ) -> Result<PathBuf, AppError> {
@@ -948,8 +696,11 @@ mod tests {
 
     fn result(path: &str) -> Result<SearchResult, Box<dyn std::error::Error>> {
         Ok(SearchResult::new(
-            collection("Notes")?,
-            PathBuf::from(path),
+            kv_application::SearchFile::new(
+                kv_domain::FileId::try_new(1)?,
+                collection("Notes")?,
+                PathBuf::from(path),
+            ),
             PassageKind::Body,
             "body text".to_owned(),
             1.0,

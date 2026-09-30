@@ -30,7 +30,7 @@ pub use error::{
     IndexStoreError, ListCollectionsError, RerankError, SearchError, SearchStoreError,
     SemanticIndexStoreError, UpdateCollectionError,
 };
-pub use get_file::GetFile;
+pub use get_file::{FileSelector, GetFile};
 pub use hybrid_search::{HybridResult, HybridResultSet, HybridSearch};
 pub use index_status::ReadIndexStatus;
 pub use lexical_search::SearchLexical;
@@ -43,8 +43,12 @@ pub use ports::{
     GraphStore, HybridCandidate, HybridCandidates, HybridSearchStore, InMemoryGraphStore,
     IndexState, IndexStatus, LexicalIndexStore, LexicalSearchStore, ModelAvailability, Neighbor,
     Position, PreparedSemanticCollection, PreparedSemanticPassage, ReconcileOutcome, Reranker,
-    RetrievedFile, SearchResult, SearchResultSet, SearchScope, SemanticIndexStore, SemanticStatus,
-    StoredFile, traverse_graph,
+    RetrievedFile, SearchFile, SearchResult, SearchResultSet, SearchScope, SemanticIndexStore,
+    SemanticStatus, StoredFile, traverse_graph,
 };
 pub use semantic_update::{SemanticUpdateCoordinator, SemanticUpdatePorts};
 pub use update_collection::{UpdateCollection, UpdateOutcome, UpdateTarget};
+
+pub use ports::{
+    CollectionIndexInspection, DatabaseIndexInspection, IndexInspection, IndexInspectionStore,
+};

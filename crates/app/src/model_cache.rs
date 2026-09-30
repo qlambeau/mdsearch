@@ -13,10 +13,6 @@ impl ModelCacheEnvironment {
             fastembed_cache_dir: std::env::var_os("FASTEMBED_CACHE_DIR").map(PathBuf::from),
         }
     }
-
-    pub(crate) const fn needs_home(&self) -> bool {
-        self.hf_home.is_none() && self.fastembed_cache_dir.is_none()
-    }
 }
 
 /// Resolves the model cache directory for a run.

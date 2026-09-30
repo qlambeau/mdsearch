@@ -8,11 +8,8 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     match kv_app::run_from_environment(std::env::args_os()) {
         Ok(output) => {
-            if output.is_empty() {
-                return ExitCode::SUCCESS;
-            }
             let mut stdout = io::stdout().lock();
-            if writeln!(stdout, "{output}").is_err() {
+            if output.write_to(&mut stdout).is_err() {
                 return ExitCode::FAILURE;
             }
             ExitCode::SUCCESS
