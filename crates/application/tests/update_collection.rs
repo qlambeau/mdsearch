@@ -30,6 +30,13 @@ impl InMemoryFileSystem {
 }
 
 impl FileSystem for InMemoryFileSystem {
+    fn resolve_source(&self, path: &Path) -> Result<kv_domain::CollectionSource, FileSystemError> {
+        Err(FileSystemError::Unreadable {
+            path: path.to_owned(),
+            source: std::io::Error::other("not implemented"),
+        })
+    }
+
     fn expand(&self, path: &Path) -> Result<Vec<PathBuf>, FileSystemError> {
         if !self.files.contains_key(path) {
             return Err(FileSystemError::Unreadable {
@@ -311,6 +318,47 @@ fn reports_malformed_frontmatter_from_the_store() -> Result<(), Box<dyn Error>> 
     )?;
 
     assert_eq!(outcome.malformed_frontmatter(), 2);
+
+    Ok(())
+}
+
+/// Covers: REQ-021 FR-007 — files absent from all registered roots are removed even while still on disk.
+#[test]
+fn removes_stored_file_when_no_registered_source_discovers_it() -> Result<(), Box<dyn Error>> {
+    let collection = collection()?;
+    let mut filesystem = InMemoryFileSystem::default();
+    filesystem.insert("a.md", b"still on disk");
+    let mut store = InMemoryFileStore::default();
+    store.add_collection(&collection);
+    store.store_file(&collection, "a.md", b"still on disk");
+    let mut use_case = UpdateCollection::new(filesystem, store, FixedClock);
+
+    let outcome = use_case.execute(&collection, UpdateTarget::RegisteredFiles(&[]), false)?;
+
+    assert_eq!(outcome.deleted(), 1);
+
+    Ok(())
+}
+
+/// Covers: REQ-021 FR-009 — skipping an unreadable discovered file retains its prior record.
+#[test]
+fn skips_an_unreadable_registered_file_without_deleting_its_stored_record()
+-> Result<(), Box<dyn Error>> {
+    let collection = collection()?;
+    let filesystem = InMemoryFileSystem::default();
+    let mut store = InMemoryFileStore::default();
+    store.add_collection(&collection);
+    store.store_file(&collection, "a.md", b"previous content");
+    let mut use_case = UpdateCollection::new(filesystem, store, FixedClock);
+
+    let outcome = use_case.execute(
+        &collection,
+        UpdateTarget::RegisteredFiles(&[PathBuf::from("a.md")]),
+        true,
+    )?;
+
+    assert_eq!(outcome.skipped(), 1);
+    assert_eq!(outcome.deleted(), 0);
 
     Ok(())
 }

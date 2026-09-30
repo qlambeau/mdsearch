@@ -93,15 +93,20 @@ pub(crate) struct ContextArgs {
 #[derive(Debug, Subcommand)]
 pub(crate) enum CollectionCommand {
     #[command(
-        about = "Create an empty collection",
-        after_help = "Example: mdsearch collection create Notes"
+        about = "Create a collection and register source paths",
+        after_help = "Example: mdsearch collection create Notes ~/vault"
     )]
     Create(CreateCollectionArgs),
     #[command(
-        about = "List collections in the database",
-        after_help = "Example: mdsearch collection list"
+        about = "List collections and registered sources",
+        after_help = "Example: mdsearch collection list --json"
     )]
     List(ListCollectionsArgs),
+    #[command(
+        about = "Replace a collection's registered sources",
+        after_help = "Example: mdsearch collection configure Notes --sources ~/vault"
+    )]
+    Configure(ConfigureCollectionArgs),
     #[command(
         about = "Delete a collection and its stored indexes",
         after_help = "Example: mdsearch collection destroy Notes"
@@ -114,7 +119,7 @@ pub(crate) enum CollectionCommand {
     Add(AddFilesArgs),
     #[command(
         about = "Reconcile files and rebuild lexical/graph indexes",
-        after_help = "Example: mdsearch collection update Notes ~/vault"
+        after_help = "Example: mdsearch collection update --collection Notes"
     )]
     Update(UpdateCollectionArgs),
 }
@@ -239,10 +244,23 @@ pub(crate) struct HybridArgs {
 pub(crate) struct CreateCollectionArgs {
     #[arg(value_name = "NAME", help = "new collection name")]
     pub(crate) name: String,
+    #[arg(value_name = "PATH", num_args = 1.., help = "Markdown file or directory source")]
+    pub(crate) paths: Vec<PathBuf>,
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct ListCollectionsArgs {}
+pub(crate) struct ListCollectionsArgs {
+    #[arg(long, help = "write collection names and sources as JSON")]
+    pub(crate) json: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ConfigureCollectionArgs {
+    #[arg(value_name = "NAME", help = "collection to configure")]
+    pub(crate) name: String,
+    #[arg(long = "sources", value_name = "PATH", required = true, num_args = 1.., help = "replacement Markdown file or directory sources")]
+    pub(crate) paths: Vec<PathBuf>,
+}
 
 #[derive(Debug, Args)]
 pub(crate) struct DestroyCollectionArgs {
@@ -265,18 +283,16 @@ pub(crate) struct UpdateCollectionArgs {
     #[arg(long)]
     pub(crate) all: bool,
     #[arg(
+        long = "collection",
+        short = 'c',
         value_name = "NAME",
-        required_unless_present = "all",
         conflicts_with = "all"
     )]
     pub(crate) name: Option<String>,
-    #[arg(
-        value_name = "PATH",
-        num_args = 1..,
-        required_unless_present = "all",
-        conflicts_with = "all"
-    )]
-    pub(crate) paths: Vec<PathBuf>,
+    #[arg(value_name = "NAME", conflicts_with = "all")]
+    pub(crate) legacy_name: Option<String>,
+    #[arg(value_name = "PATH", num_args = 1..)]
+    pub(crate) legacy_paths: Vec<PathBuf>,
     #[arg(long, help = "skip unreadable files and continue updating")]
     pub(crate) skip_unreadable: bool,
 }

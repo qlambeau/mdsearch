@@ -1,9 +1,9 @@
 use thiserror::Error;
 
 use kv_application::{
-    AddFilesError, CollectionStoreError, CreateCollectionError, DestroyCollectionError, EmbedError,
-    GetFileError, GraphStoreError, HybridError, IndexStatusError, ListCollectionsError,
-    SearchError, UpdateCollectionError,
+    AddFilesError, ClockError, CollectionStoreError, CreateCollectionError, DestroyCollectionError,
+    EmbedError, FileSystemError, GetFileError, GraphStoreError, HybridError, IndexStatusError,
+    ListCollectionsError, SearchError, UpdateCollectionError,
 };
 use kv_domain::{CollectionNameError, EmbeddingModelError, RerankerModelError};
 
@@ -70,4 +70,16 @@ pub enum AppError {
     /// The database could not be opened or accessed.
     #[error(transparent)]
     CollectionStore(#[from] CollectionStoreError),
+    /// One or more collection updates failed after all collections were attempted.
+    #[error("update completed with failures:\n{0}")]
+    UpdateAllFailed(String),
+    /// The collection has no registered filesystem sources.
+    #[error("collection {0} has no registered sources; configure sources before updating")]
+    NoRegisteredSources(String),
+    /// A collection source could not be resolved or scanned.
+    #[error(transparent)]
+    FileSystem(#[from] FileSystemError),
+    /// The system clock could not provide collection creation metadata.
+    #[error(transparent)]
+    Clock(#[from] ClockError),
 }

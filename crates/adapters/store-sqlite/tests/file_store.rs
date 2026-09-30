@@ -34,9 +34,9 @@ fn table_count(connection: &Connection, table: &str) -> Result<i64, Box<dyn Erro
     Ok(count)
 }
 
-/// Covers: FR-001 and the schema version 7 migration.
+/// Covers: REQ-021 FR-012 and schema-v8 table creation.
 #[test]
-fn open_creates_the_tables_at_version_six() -> Result<(), Box<dyn Error>> {
+fn open_creates_the_tables_at_version_eight() -> Result<(), Box<dyn Error>> {
     let directory = tempdir()?;
     let database_path = directory.path().join("collections.db");
     SqliteCollectionStore::open(&database_path)?;
@@ -53,6 +53,7 @@ fn open_creates_the_tables_at_version_six() -> Result<(), Box<dyn Error>> {
     let nodes_table = table_count(&connection, "nodes")?;
     let edges_table = table_count(&connection, "edges")?;
     let graph_state_table = table_count(&connection, "graph_state")?;
+    let sources_table = table_count(&connection, "collection_sources")?;
     let offset_column = column_count(&connection, "passage_files", "byte_offset")?;
     let dimension_column = column_count(&connection, "semantic_index_state", "dimension")?;
 
@@ -66,6 +67,7 @@ fn open_creates_the_tables_at_version_six() -> Result<(), Box<dyn Error>> {
             ("nodes", nodes_table),
             ("edges", edges_table),
             ("graph_state", graph_state_table),
+            ("collection_sources", sources_table),
             ("passage_files.byte_offset", offset_column),
             ("semantic_index_state.dimension", dimension_column),
         ],
@@ -75,7 +77,7 @@ fn open_creates_the_tables_at_version_six() -> Result<(), Box<dyn Error>> {
 }
 
 fn assert_counts(version: i64, counts: &[(&str, i64)]) {
-    assert_eq!(version, 7);
+    assert_eq!(version, 8);
     for (name, count) in counts {
         assert_eq!(*count, 1, "unexpected count for {name}");
     }
@@ -206,7 +208,7 @@ fn migrates_a_version_one_database_to_current() -> Result<(), Box<dyn Error>> {
             row.get(0)
         })?;
 
-    assert_eq!(version, 7);
+    assert_eq!(version, 8);
 
     Ok(())
 }
@@ -267,7 +269,7 @@ fn migrates_a_version_three_database_to_current() -> Result<(), Box<dyn Error>> 
         |row| row.get(0),
     )?;
 
-    assert_eq!(version, 7);
+    assert_eq!(version, 8);
     assert_eq!(offset_column, 1);
 
     Ok(())
@@ -543,6 +545,68 @@ fn reconcile_rolls_back_files_and_index_on_failure() -> Result<(), Box<dyn Error
     assert_eq!(passage_count, 0);
     assert_eq!(state_count, 0);
 
+    Ok(())
+}
+
+/// Covers: REQ-021 FR-010 — a graph rebuild failure rolls back content, lexical, and graph state.
+#[test]
+fn reconcile_rolls_back_file_and_lexical_changes_when_graph_rebuild_fails()
+-> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let database_path = directory.path().join("collections.db");
+    let collection = name()?;
+    let mut collections = SqliteCollectionStore::open(&database_path)?;
+    collections.create_collection(&collection, Timestamp::from_unix_seconds(1_700_000_000))?;
+    let path = directory.path().join("a.md");
+    let previous = b"---\ntags: [old]\n---\nalpha";
+    let mut store = SqliteFileStore::open_for_ingestion(&database_path)?;
+    store.reconcile(
+        &collection,
+        &[FileRecord::new(path.clone(), previous.to_vec())],
+        &[],
+        Timestamp::from_unix_seconds(1_700_000_000),
+    )?;
+    let connection = Connection::open(&database_path)?;
+    connection.execute_batch(
+        "CREATE TRIGGER fail_graph_rebuild BEFORE INSERT ON nodes
+         BEGIN SELECT RAISE(ABORT, 'forced graph failure'); END;",
+    )?;
+    drop(connection);
+
+    let error = store
+        .reconcile(
+            &collection,
+            &[FileRecord::new(
+                path,
+                b"---\ntags: [new]\n---\nbeta".to_vec(),
+            )],
+            &[],
+            Timestamp::from_unix_seconds(1_700_000_001),
+        )
+        .err()
+        .ok_or("graph trigger should reject the update")?;
+    assert!(matches!(error, FileStoreError::Storage(_)));
+
+    let connection = Connection::open(&database_path)?;
+    let content: Vec<u8> =
+        connection.query_row("SELECT content FROM files LIMIT 1", [], |row| row.get(0))?;
+    let old_tag: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM nodes WHERE node_key = 'old'",
+        [],
+        |row| row.get(0),
+    )?;
+    let new_tag: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM nodes WHERE node_key = 'new'",
+        [],
+        |row| row.get(0),
+    )?;
+    let passage_count: i64 =
+        connection.query_row("SELECT COUNT(*) FROM passage_files", [], |row| row.get(0))?;
+
+    assert_eq!(content, previous);
+    assert_eq!(old_tag, 1);
+    assert_eq!(new_tag, 0);
+    assert!(passage_count > 0);
     Ok(())
 }
 

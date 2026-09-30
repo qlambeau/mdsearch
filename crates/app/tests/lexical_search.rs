@@ -24,14 +24,28 @@ fn add_and_update(
     file: &Path,
     content: &str,
 ) -> Result<(), Box<dyn Error>> {
-    fs::write(file, content)?;
+    let source_root = home.join(collection);
+    fs::create_dir_all(&source_root)?;
+    let target_file = source_root.join(file.file_name().ok_or("source file has no name")?);
+    fs::write(&target_file, content)?;
     run(
         [
             "mdsearch",
             "collection",
             "add",
             collection,
-            path_argument(file)?,
+            path_argument(&target_file)?,
+        ],
+        home,
+    )?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "configure",
+            collection,
+            "--sources",
+            path_argument(&source_root)?,
         ],
         home,
     )?;
@@ -40,8 +54,8 @@ fn add_and_update(
             "mdsearch",
             "collection",
             "update",
+            "--collection",
             collection,
-            path_argument(file)?,
         ],
         home,
     )?;

@@ -42,9 +42,20 @@ fn add_and_update(
         [
             "mdsearch",
             "collection",
-            "update",
+            "configure",
             collection,
-            path_argument(file)?,
+            "--sources",
+            path_argument(file.parent().ok_or("source file has no parent")?)?,
+        ],
+        home,
+    )?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "update",
+            "--collection",
+            collection,
         ],
         home,
     )?;

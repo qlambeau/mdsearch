@@ -209,16 +209,30 @@ fn build_collection(
         ),
         content,
     )?;
-    for command in [
-        vec!["collection", "create", collection],
-        vec!["collection", "add", collection, file_argument],
-        vec!["collection", "update", collection, file_argument],
-    ] {
-        let mut args = vec!["mdsearch"];
-        args.extend(command.iter().copied());
-        args.extend(["--database", database_argument]);
-        run(&args, home)?;
-    }
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "create",
+            collection,
+            file_argument,
+            "--database",
+            database_argument,
+        ],
+        home,
+    )?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "update",
+            "--collection",
+            collection,
+            "--database",
+            database_argument,
+        ],
+        home,
+    )?;
     Ok(())
 }
 

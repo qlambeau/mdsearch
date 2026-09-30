@@ -1,9 +1,16 @@
 use std::path::{Path, PathBuf};
 
 use crate::FileSystemError;
+use kv_domain::CollectionSource;
 
 /// Discovers and reads markdown files from the local filesystem.
 pub trait FileSystem {
+    /// Resolves an existing Markdown file or directory to a canonical source.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the path is absent, inaccessible, or is not a Markdown file or directory.
+    fn resolve_source(&self, path: &Path) -> Result<CollectionSource, FileSystemError>;
     /// Expands a single input path into zero or more canonical `.md` file paths.
     ///
     /// A directory is walked recursively; a `.md` file yields itself; a

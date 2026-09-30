@@ -11,16 +11,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use kv_application::{
-    CollectionStore, CollectionStoreError, EmbedTarget, FileRecord, FileRetrievalStore,
-    FileRetrievalStoreError, FileStore, FileStoreError, IndexStatus, IndexStoreError,
-    LexicalIndexStore, LexicalSearchStore, Position, ReconcileOutcome, RetrievedFile, SearchResult,
-    SearchResultSet, SearchScope, SearchStoreError, SemanticIndexStore, SemanticIndexStoreError,
-    SemanticStatus, StoredFile,
+    CollectionSourceStore, CollectionSourceSummary, CollectionStore, CollectionStoreError,
+    EmbedTarget, FileRecord, FileRetrievalStore, FileRetrievalStoreError, FileStore,
+    FileStoreError, IndexStatus, IndexStoreError, LexicalIndexStore, LexicalSearchStore, Position,
+    ReconcileOutcome, RetrievedFile, SearchResult, SearchResultSet, SearchScope, SearchStoreError,
+    SemanticIndexStore, SemanticIndexStoreError, SemanticStatus, StoredFile,
 };
 use kv_domain::{
-    CollectionName, ContentHash, Embedding, EmbeddingModel, EntityGraph, FileId, FrontmatterIssue,
-    GraphSource, PassageKind, RerankerModel, SemanticIndexStatus, SemanticPassage, Timestamp,
-    extract_graph, file_set_fingerprint, segment_passages,
+    CollectionName, CollectionSource, ContentHash, Embedding, EmbeddingModel, EntityGraph, FileId,
+    FrontmatterIssue, GraphSource, PassageKind, RerankerModel, SemanticIndexStatus,
+    SemanticPassage, SourceKind, Timestamp, extract_graph, file_set_fingerprint, segment_passages,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use sqlite_vector_rs::scalar;
@@ -32,7 +32,7 @@ pub use graph::SqliteGraphStore;
 pub use hybrid::SqliteHybridSearchStore;
 
 /// The current database schema version applied by [`migrate`].
-const CURRENT_SCHEMA_VERSION: i64 = 7;
+const CURRENT_SCHEMA_VERSION: i64 = 8;
 
 /// The schema version at which the lexical index tables exist.
 const INDEX_SCHEMA_VERSION: i64 = 3;
@@ -192,6 +192,13 @@ fn migrate(connection: &Connection) -> Result<(), rusqlite::Error> {
             model TEXT NOT NULL,
             passage_count INTEGER NOT NULL,
             embedded_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS collection_sources (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            collection_id INTEGER NOT NULL REFERENCES collections(collection_id) ON DELETE CASCADE,
+            source_path TEXT NOT NULL,
+            source_kind TEXT NOT NULL CHECK (source_kind IN ('file', 'directory')),
+            UNIQUE(collection_id, source_path)
         );",
     )?;
 
@@ -369,6 +376,12 @@ impl CollectionStore for SqliteCollectionStore {
             .map_err(storage_failure)?;
         transaction
             .execute(
+                "DELETE FROM collection_sources WHERE collection_id = ?1",
+                params![collection_id],
+            )
+            .map_err(storage_failure)?;
+        transaction
+            .execute(
                 "DELETE FROM files WHERE collection_id = ?1",
                 params![collection_id],
             )
@@ -417,6 +430,139 @@ impl CollectionStore for SqliteCollectionStore {
 
         CollectionName::try_from(display_name.as_str()).map_err(storage_failure)
     }
+}
+
+impl CollectionSourceStore for SqliteCollectionStore {
+    fn create_collection_with_sources(
+        &mut self,
+        name: &CollectionName,
+        created_at: Timestamp,
+        sources: &[CollectionSource],
+    ) -> Result<(), CollectionStoreError> {
+        let created_at = i64::try_from(created_at.as_unix_seconds()).map_err(storage_failure)?;
+        let transaction = self.connection.transaction().map_err(storage_failure)?;
+        transaction
+            .execute(
+                "INSERT INTO collections(display_name, name_key, created_at) VALUES (?1, ?2, ?3)",
+                params![name.display_name(), name.name_key(), created_at],
+            )
+            .map_err(|error| {
+                if is_unique_violation(&error) {
+                    CollectionStoreError::Duplicate
+                } else {
+                    storage_failure(error)
+                }
+            })?;
+        let collection_id = transaction.last_insert_rowid();
+        for source in sources {
+            insert_source(&transaction, collection_id, source).map_err(storage_failure)?;
+        }
+        transaction.commit().map_err(storage_failure)
+    }
+
+    fn replace_collection_sources(
+        &mut self,
+        name: &CollectionName,
+        sources: &[CollectionSource],
+    ) -> Result<(), CollectionStoreError> {
+        let transaction = self.connection.transaction().map_err(storage_failure)?;
+        let collection_id = transaction
+            .query_row(
+                "SELECT collection_id FROM collections WHERE name_key = ?1",
+                params![name.name_key()],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(storage_failure)?
+            .ok_or(CollectionStoreError::CollectionNotFound)?;
+        transaction
+            .execute(
+                "DELETE FROM collection_sources WHERE collection_id = ?1",
+                params![collection_id],
+            )
+            .map_err(storage_failure)?;
+        for source in sources {
+            insert_source(&transaction, collection_id, source).map_err(storage_failure)?;
+        }
+        transaction.commit().map_err(storage_failure)
+    }
+
+    fn collection_sources(
+        &self,
+        name: &CollectionName,
+    ) -> Result<Vec<CollectionSource>, CollectionStoreError> {
+        let collection_id = self
+            .connection
+            .query_row(
+                "SELECT collection_id FROM collections WHERE name_key = ?1",
+                params![name.name_key()],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(storage_failure)?
+            .ok_or(CollectionStoreError::CollectionNotFound)?;
+        load_sources(&self.connection, collection_id).map_err(storage_failure)
+    }
+
+    fn list_collections_with_sources(
+        &self,
+    ) -> Result<Vec<CollectionSourceSummary>, CollectionStoreError> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT collection_id, display_name FROM collections ORDER BY name_key")
+            .map_err(storage_failure)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(storage_failure)?;
+        let mut summaries = Vec::new();
+        for row in rows {
+            let (id, display_name) = row.map_err(storage_failure)?;
+            summaries.push(CollectionSourceSummary {
+                name: CollectionName::try_from(display_name.as_str()).map_err(storage_failure)?,
+                sources: load_sources(&self.connection, id).map_err(storage_failure)?,
+            });
+        }
+        Ok(summaries)
+    }
+}
+
+fn insert_source(
+    transaction: &Transaction<'_>,
+    collection_id: i64,
+    source: &CollectionSource,
+) -> Result<(), rusqlite::Error> {
+    transaction.execute(
+        "INSERT INTO collection_sources(collection_id, source_path, source_kind) VALUES (?1, ?2, ?3)",
+        params![collection_id, source.path().to_string_lossy(), match source.kind() { SourceKind::File => "file", SourceKind::Directory => "directory" }],
+    )?;
+    Ok(())
+}
+
+fn load_sources(
+    connection: &Connection,
+    collection_id: i64,
+) -> Result<Vec<CollectionSource>, rusqlite::Error> {
+    let mut statement = connection.prepare("SELECT source_path, source_kind FROM collection_sources WHERE collection_id = ?1 ORDER BY source_path")?;
+    let rows = statement.query_map(params![collection_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut sources = Vec::new();
+    for row in rows {
+        let (path, kind) = row?;
+        let kind = match kind.as_str() {
+            "file" => SourceKind::File,
+            "directory" => SourceKind::Directory,
+            _ => return Err(rusqlite::Error::InvalidQuery),
+        };
+        sources.push(CollectionSource::new(PathBuf::from(path), kind));
+    }
+    Ok(sources)
+}
+
+fn is_unique_violation(error: &rusqlite::Error) -> bool {
+    matches!(error, rusqlite::Error::SqliteFailure(code, _) if code.code == rusqlite::ffi::ErrorCode::ConstraintViolation)
 }
 
 impl FileStore for SqliteFileStore {

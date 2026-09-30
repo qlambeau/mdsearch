@@ -29,6 +29,17 @@ fn create_and_add(home: &Path, file: &Path, content: &str) -> Result<(), Box<dyn
         ],
         home,
     )?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "configure",
+            "Notes",
+            "--sources",
+            path_argument(file)?,
+        ],
+        home,
+    )?;
     Ok(())
 }
 
@@ -201,6 +212,18 @@ fn update_removes_passages_of_a_deleted_file() -> Result<(), Box<dyn Error>> {
         [
             "mdsearch",
             "collection",
+            "configure",
+            "Notes",
+            "--sources",
+            path_argument(&a)?,
+            path_argument(&b)?,
+        ],
+        home.path(),
+    )?;
+    run(
+        [
+            "mdsearch",
+            "collection",
             "update",
             "Notes",
             path_argument(&a)?,
@@ -208,7 +231,6 @@ fn update_removes_passages_of_a_deleted_file() -> Result<(), Box<dyn Error>> {
         ],
         home.path(),
     )?;
-
     let before = run(["mdsearch", "index", "status"], home.path())?;
     assert!(
         before.contains("lexical index built, 2 file(s), 3 passage(s)"),
@@ -346,6 +368,28 @@ fn update_all_rebuilds_the_index_for_every_collection() -> Result<(), Box<dyn Er
             "collection",
             "add",
             "Archive",
+            path_argument(&b)?,
+        ],
+        home.path(),
+    )?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "configure",
+            "Notes",
+            "--sources",
+            path_argument(&a)?,
+        ],
+        home.path(),
+    )?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "configure",
+            "Archive",
+            "--sources",
             path_argument(&b)?,
         ],
         home.path(),

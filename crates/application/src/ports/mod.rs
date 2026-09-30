@@ -1,4 +1,5 @@
 mod clock;
+mod collection_source_store;
 mod collection_store;
 mod embedding_generator;
 mod file_retrieval_store;
@@ -12,6 +13,9 @@ mod reranker;
 mod semantic_index_store;
 
 pub use clock::Clock;
+#[cfg(test)]
+pub use collection_source_store::fake as collection_source_store_fake;
+pub use collection_source_store::{CollectionSourceStore, CollectionSourceSummary};
 pub use collection_store::CollectionStore;
 pub use embedding_generator::EmbeddingGenerator;
 pub use file_retrieval_store::{FileRetrievalStore, RetrievedFile};

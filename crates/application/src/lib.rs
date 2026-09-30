@@ -34,11 +34,14 @@ pub use hybrid_search::{HybridResult, HybridResultSet, HybridSearch};
 pub use index_status::ReadIndexStatus;
 pub use lexical_search::SearchLexical;
 pub use list_collections::ListCollections;
+#[cfg(test)]
+pub use ports::collection_source_store_fake;
 pub use ports::{
-    Clock, CollectionStore, EmbedTarget, EmbeddingGenerator, FileRecord, FileRetrievalStore,
-    FileStore, FileSystem, GraphStore, HybridCandidate, HybridCandidates, HybridSearchStore,
-    InMemoryGraphStore, IndexState, IndexStatus, LexicalIndexStore, LexicalSearchStore, Neighbor,
-    Position, ReconcileOutcome, Reranker, RetrievedFile, SearchResult, SearchResultSet,
-    SearchScope, SemanticIndexStore, SemanticStatus, StoredFile, traverse_graph,
+    Clock, CollectionSourceStore, CollectionSourceSummary, CollectionStore, EmbedTarget,
+    EmbeddingGenerator, FileRecord, FileRetrievalStore, FileStore, FileSystem, GraphStore,
+    HybridCandidate, HybridCandidates, HybridSearchStore, InMemoryGraphStore, IndexState,
+    IndexStatus, LexicalIndexStore, LexicalSearchStore, Neighbor, Position, ReconcileOutcome,
+    Reranker, RetrievedFile, SearchResult, SearchResultSet, SearchScope, SemanticIndexStore,
+    SemanticStatus, StoredFile, traverse_graph,
 };
 pub use update_collection::{UpdateCollection, UpdateOutcome, UpdateTarget};

@@ -139,7 +139,6 @@ fn help_describes_command_and_shows_example(
 /// Covers: REQ-020 FR-009 — ingestion accepts `--skip-unreadable`.
 #[rstest]
 #[case("add")]
-#[case("update")]
 fn ingestion_accepts_skip_unreadable(#[case] subcommand: &str) -> Result<(), Box<dyn Error>> {
     let directory = tempdir()?;
     let database_path = directory.path().join("collections.db");
@@ -178,6 +177,46 @@ fn ingestion_accepts_skip_unreadable(#[case] subcommand: &str) -> Result<(), Box
     assert_eq!(output.status.code(), Some(0));
     assert!(String::from_utf8(output.stdout)?.contains("skipped 1"));
 
+    Ok(())
+}
+
+/// Covers: REQ-021 FR-009 — source-aware update accepts the skip option.
+#[test]
+fn update_accepts_skip_unreadable() -> Result<(), Box<dyn Error>> {
+    let directory = tempdir()?;
+    let database_path = directory.path().join("collections.db");
+    let database = path_argument(&database_path)?;
+    let source = directory.path().join("source");
+    std::fs::create_dir(&source)?;
+    std::fs::write(source.join("readable.md"), "rust note")?;
+    let source = path_argument(&source)?;
+    run(
+        [
+            "mdsearch",
+            "collection",
+            "create",
+            "Notes",
+            source,
+            "--database",
+            database,
+        ],
+        directory.path(),
+    )?;
+    let output = Command::new(env!("CARGO_BIN_EXE_mdsearch"))
+        .args([
+            "collection",
+            "update",
+            "--collection",
+            "Notes",
+            "--database",
+            database,
+            "--skip-unreadable",
+        ])
+        .env("HOME", directory.path())
+        .output()?;
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(String::from_utf8(output.stdout)?.contains("added 1"));
     Ok(())
 }
 
@@ -327,17 +366,6 @@ fn create_indexed_collection(
             "collection",
             "create",
             collection,
-            "--database",
-            database,
-        ],
-        home,
-    )?;
-    run(
-        [
-            "mdsearch",
-            "collection",
-            "add",
-            collection,
             file,
             "--database",
             database,
@@ -349,8 +377,8 @@ fn create_indexed_collection(
             "mdsearch",
             "collection",
             "update",
+            "--collection",
             collection,
-            file,
             "--database",
             database,
         ],

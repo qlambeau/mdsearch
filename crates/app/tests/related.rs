@@ -24,12 +24,11 @@ fn store_and_update(
         fs::write(vault.join(name), content)?;
     }
 
-    run(["mdsearch", "collection", "create", collection], home)?;
     run(
         [
             "mdsearch",
             "collection",
-            "add",
+            "create",
             collection,
             path_argument(&vault)?,
         ],
@@ -40,8 +39,8 @@ fn store_and_update(
             "mdsearch",
             "collection",
             "update",
+            "--collection",
             collection,
-            path_argument(&vault)?,
         ],
         home,
     )?;

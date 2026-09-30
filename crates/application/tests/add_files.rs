@@ -30,6 +30,13 @@ impl InMemoryFileSystem {
 }
 
 impl FileSystem for InMemoryFileSystem {
+    fn resolve_source(&self, path: &Path) -> Result<kv_domain::CollectionSource, FileSystemError> {
+        Err(FileSystemError::Unreadable {
+            path: path.to_owned(),
+            source: std::io::Error::other("not implemented"),
+        })
+    }
+
     fn expand(&self, path: &Path) -> Result<Vec<PathBuf>, FileSystemError> {
         if !self.files.contains_key(path) {
             return Err(FileSystemError::Unreadable {

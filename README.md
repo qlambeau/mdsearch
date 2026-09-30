@@ -114,17 +114,14 @@ mdsearch --help
 
 ## Quick start
 
-Create a vault, add it to a collection, index it, and search:
+Register a vault as a source, index it, and search:
 
 ```sh
-# 1. Create a collection.
-mdsearch collection create Notes
+# 1. Register a collection source (registration does not index files).
+mdsearch collection create Notes ~/vault
 
-# 2. Add a directory of markdown files to it.
-mdsearch collection add Notes ~/vault
-
-# 3. Build the lexical index and entity graph.
-mdsearch collection update Notes ~/vault
+# 2. Build the lexical index and entity graph.
+mdsearch collection update --collection Notes
 
 # 4. Search lexically.
 mdsearch search rust --collection Notes
@@ -165,9 +162,10 @@ switches apply. Help and version write to stdout and exit 0. Argument errors
 write to stderr and exit 2; operational failures write to stderr and exit 1.
 Commands that need a default path require `HOME`; help and version do not.
 
-### `collection create NAME`
+### `collection create NAME [PATH...]`
 
-Create a new empty collection.
+Create a collection and register optional Markdown file or directory sources.
+Source paths are canonicalized and saved without indexing their contents.
 
 | Option | Description |
 | --- | --- |
@@ -176,18 +174,31 @@ Create a new empty collection.
 ```sh
 mdsearch collection create Notes
 # created collection "Notes"
+
+mdsearch collection create Notes ~/vault
+# created collection "Notes"
 ```
 
 Names are normalized for comparison; creating an equivalent name again fails
 with a duplicate error.
 
-### `collection list`
+### `collection configure NAME --sources PATH...`
 
-List all collections.
+Replace a collection's registered source list. The change does not index files.
+
+```sh
+mdsearch collection configure Notes --sources ~/vault ~/reference.md
+```
+
+### `collection list [--json]`
+
+List collections and their registered canonical sources. JSON output contains a
+`collections` array with `name` and `sources` fields.
 
 ```sh
 mdsearch collection list
-# Notes
+mdsearch collection list --json
+# {"collections":[{"name":"Notes","sources":["/home/me/vault"]}]}
 ```
 
 ### `collection destroy NAME`
@@ -216,7 +227,7 @@ mdsearch collection add Notes ~/vault
 # added 3 files to collection "Notes"
 ```
 
-### `collection update [NAME] [PATH...]`
+### `collection update --collection NAME` / `collection update --all`
 
 Re-index a collection (or all collections), reconciling files against the
 filesystem. This is the main indexing command: it upserts added/modified files,
@@ -226,14 +237,15 @@ build the semantic index (see [`embed`](#embed)).
 
 | Option | Description |
 | --- | --- |
-| `--all` | Update every collection in the database. |
+| `--collection NAME` | Update one collection from its registered sources. |
+| `--all` | Update every collection in the database, continuing after failures. |
 | `--skip-unreadable` | Skip unreadable files and continue, reporting the skipped count. |
 | `--database PATH` | Database file to use. |
 
-`NAME` and `PATH...` are mutually exclusive with `--all`.
+Collections created before source registration must be configured before update.
 
 ```sh
-mdsearch collection update Notes ~/vault
+mdsearch collection update --collection Notes
 # updated collection "Notes": added 0, modified 0, deleted 0
 ```
 

@@ -5,9 +5,10 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use kv_application::{
-    AddFiles, CreateCollection, DestroyCollection, EmbedCollections, EmbedScope, GetFile,
-    GraphStore, HybridResult, HybridSearch, ListCollections, ReadIndexStatus, SearchLexical,
-    SearchResult, SearchScope, UpdateCollection, UpdateOutcome, UpdateTarget,
+    AddFiles, Clock, CollectionSourceStore, CreateCollection, DestroyCollection, EmbedCollections,
+    EmbedScope, FileSystem, GetFile, GraphStore, HybridResult, HybridSearch, ListCollections,
+    ReadIndexStatus, SearchLexical, SearchResult, SearchScope, UpdateCollection, UpdateOutcome,
+    UpdateTarget,
 };
 use kv_domain::{CollectionName, EmbeddingModel, EntityKind, NodeId, RerankerModel};
 use kv_embed_fastembed::{FastembedGenerator, FastembedReranker};
@@ -98,10 +99,13 @@ fn run_cli(
 
     match cli.command {
         Command::Collection(CollectionCommand::Create(arguments)) => {
-            create_collection(&arguments.name, database, home_directory)
+            create_collection(&arguments.name, &arguments.paths, database, home_directory)
         }
-        Command::Collection(CollectionCommand::List(_)) => {
-            list_collections(database, home_directory)
+        Command::Collection(CollectionCommand::List(arguments)) => {
+            list_collections(arguments.json, database, home_directory)
+        }
+        Command::Collection(CollectionCommand::Configure(arguments)) => {
+            configure_collection(&arguments.name, &arguments.paths, database, home_directory)
         }
         Command::Collection(CollectionCommand::Destroy(arguments)) => {
             destroy_collection(&arguments.name, database, home_directory)
@@ -117,14 +121,17 @@ fn run_cli(
             if arguments.all {
                 update_all_collections(database.clone(), arguments.skip_unreadable, home_directory)
             } else {
-                let name = arguments.name.as_deref().ok_or_else(|| {
-                    AppError::Arguments(clap::Error::new(
-                        clap::error::ErrorKind::MissingRequiredArgument,
-                    ))
-                })?;
+                let name = arguments
+                    .name
+                    .as_deref()
+                    .or(arguments.legacy_name.as_deref())
+                    .ok_or_else(|| {
+                        AppError::Arguments(clap::Error::new(
+                            clap::error::ErrorKind::MissingRequiredArgument,
+                        ))
+                    })?;
                 update_collection(
                     name,
-                    &arguments.paths,
                     database.clone(),
                     arguments.skip_unreadable,
                     home_directory,
@@ -171,14 +178,21 @@ fn run_cli(
 
 fn create_collection(
     raw_name: &str,
+    paths: &[PathBuf],
     database_override: Option<std::path::PathBuf>,
     home_directory: Option<&Path>,
 ) -> Result<String, AppError> {
     let name = CollectionName::try_from(raw_name)?;
     let database_path = database_path(database_override, home_directory)?;
-    let store = SqliteCollectionStore::open(&database_path)?;
-    let mut use_case = CreateCollection::new(store, SystemClock);
-    let created_name = use_case.execute(name)?;
+    let mut store = SqliteCollectionStore::open(&database_path)?;
+    let sources = resolve_sources(paths)?;
+    let created_name = if sources.is_empty() {
+        CreateCollection::new(store, SystemClock).execute(name)?
+    } else {
+        let created_at = SystemClock.now()?;
+        store.create_collection_with_sources(&name, created_at, &sources)?;
+        name
+    };
 
     Ok(format!(
         "created collection \"{}\"",
@@ -187,19 +201,72 @@ fn create_collection(
 }
 
 fn list_collections(
+    json: bool,
     database_override: Option<std::path::PathBuf>,
     home_directory: Option<&Path>,
 ) -> Result<String, AppError> {
     let database_path = database_path(database_override, home_directory)?;
+    migrate_existing_database(&database_path)?;
     let store = SqliteCollectionStore::open_existing(&database_path)?;
-    let use_case = ListCollections::new(store);
-    let collections = use_case.execute()?;
-
+    let collections = store.list_collections_with_sources()?;
+    if json {
+        let value = serde_json::json!({"collections": collections.iter().map(|entry| serde_json::json!({
+            "name": entry.name.display_name(),
+            "sources": entry.sources.iter().map(|source| source.path().to_string_lossy()).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>()});
+        return serde_json::to_string(&value)
+            .map_err(|error| AppError::GraphQuery(error.to_string()));
+    }
     Ok(collections
         .iter()
-        .map(CollectionName::display_name)
+        .map(|entry| {
+            if entry.sources.is_empty() {
+                entry.name.display_name().to_owned()
+            } else {
+                format!(
+                    "{}\n  {}",
+                    entry.name.display_name(),
+                    entry
+                        .sources
+                        .iter()
+                        .map(|source| source.path().display().to_string())
+                        .collect::<Vec<_>>()
+                        .join("\n  ")
+                )
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n"))
+}
+
+fn configure_collection(
+    raw_name: &str,
+    paths: &[PathBuf],
+    database_override: Option<PathBuf>,
+    home_directory: Option<&Path>,
+) -> Result<String, AppError> {
+    let name = CollectionName::try_from(raw_name)?;
+    let database_path = database_path(database_override, home_directory)?;
+    migrate_existing_database(&database_path)?;
+    let mut store = SqliteCollectionStore::open_existing(&database_path)?;
+    let sources = resolve_sources(paths)?;
+    store.replace_collection_sources(&name, &sources)?;
+    Ok(format!(
+        "configured sources for collection \"{}\"",
+        name.display_name()
+    ))
+}
+
+fn resolve_sources(paths: &[PathBuf]) -> Result<Vec<kv_domain::CollectionSource>, AppError> {
+    let mut sources = Vec::new();
+    let mut unique = std::collections::BTreeSet::new();
+    for path in paths {
+        let source = kv_infrastructure::SystemFileSystem.resolve_source(path)?;
+        if unique.insert(source.path().to_owned()) {
+            sources.push(source);
+        }
+    }
+    Ok(sources)
 }
 
 fn destroy_collection(
@@ -209,6 +276,7 @@ fn destroy_collection(
 ) -> Result<String, AppError> {
     let name = CollectionName::try_from(raw_name)?;
     let database_path = database_path(database_override, home_directory)?;
+    migrate_existing_database(&database_path)?;
     let store = SqliteCollectionStore::open_existing(&database_path)?;
     let mut use_case = DestroyCollection::new(store);
     let destroyed_name = use_case.execute(&name)?;
@@ -253,7 +321,6 @@ fn add_files(
 
 fn update_collection(
     raw_name: &str,
-    paths: &[PathBuf],
     database_override: Option<PathBuf>,
     force: bool,
     home_directory: Option<&Path>,
@@ -261,8 +328,16 @@ fn update_collection(
     let name = CollectionName::try_from(raw_name)?;
     let database_path = database_path(database_override, home_directory)?;
     let store = SqliteFileStore::open_for_ingestion(&database_path)?;
+    let sources_store = SqliteCollectionStore::open_existing(&database_path)?;
+    let sources = sources_store.collection_sources(&name)?;
+    if sources.is_empty() {
+        return Err(AppError::NoRegisteredSources(
+            name.display_name().to_owned(),
+        ));
+    }
+    let files = expand_sources(&sources)?;
     let mut use_case = UpdateCollection::new(SystemFileSystem, store, SystemClock);
-    let outcome = use_case.execute(&name, UpdateTarget::Paths(paths), force)?;
+    let outcome = use_case.execute(&name, UpdateTarget::RegisteredFiles(&files), force)?;
 
     Ok(format_update(name.display_name(), &outcome))
 }
@@ -273,19 +348,65 @@ fn update_all_collections(
     home_directory: Option<&Path>,
 ) -> Result<String, AppError> {
     let database_path = database_path(database_override, home_directory)?;
+    migrate_existing_database(&database_path)?;
     let collection_store = SqliteCollectionStore::open_existing(&database_path)?;
-    let names = ListCollections::new(collection_store).execute()?;
-
-    let store = SqliteFileStore::open_for_ingestion(&database_path)?;
-    let mut use_case = UpdateCollection::new(SystemFileSystem, store, SystemClock);
-
+    let summaries = collection_store.list_collections_with_sources()?;
     let mut lines = Vec::new();
-    for name in &names {
-        let outcome = use_case.execute(name, UpdateTarget::Stored, force)?;
-        lines.push(format_update(name.display_name(), &outcome));
+    let mut failures = Vec::new();
+    for summary in &summaries {
+        let result = if summary.sources.is_empty() {
+            Err(AppError::NoRegisteredSources(
+                summary.name.display_name().to_owned(),
+            ))
+        } else {
+            expand_sources(&summary.sources).and_then(|files| {
+                let store = SqliteFileStore::open_for_ingestion(&database_path)?;
+                let mut use_case = UpdateCollection::new(SystemFileSystem, store, SystemClock);
+                let outcome = use_case.execute(
+                    &summary.name,
+                    UpdateTarget::RegisteredFiles(&files),
+                    force,
+                )?;
+                Ok(format_update(summary.name.display_name(), &outcome))
+            })
+        };
+        match result {
+            Ok(line) => lines.push(line),
+            Err(error) => {
+                let line = format!(
+                    "update failed for collection \"{}\": {error}",
+                    summary.name.display_name()
+                );
+                lines.push(line.clone());
+                failures.push(line);
+            }
+        }
     }
+    if failures.is_empty() {
+        Ok(lines.join("\n"))
+    } else {
+        Err(AppError::UpdateAllFailed(lines.join("\n")))
+    }
+}
 
-    Ok(lines.join("\n"))
+fn expand_sources(sources: &[kv_domain::CollectionSource]) -> Result<Vec<PathBuf>, AppError> {
+    use kv_domain::SourceKind;
+    let filesystem = SystemFileSystem;
+    let mut files = std::collections::BTreeSet::new();
+    for source in sources {
+        if source.kind() == SourceKind::File && !filesystem.exists(source.path())? {
+            continue;
+        }
+        for path in filesystem.expand(source.path())? {
+            files.insert(path);
+        }
+    }
+    Ok(files.into_iter().collect())
+}
+
+fn migrate_existing_database(database_path: &Path) -> Result<(), AppError> {
+    drop(SqliteFileStore::open_for_ingestion(database_path)?);
+    Ok(())
 }
 
 fn index_status(

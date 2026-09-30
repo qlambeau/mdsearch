@@ -45,25 +45,18 @@ fn embed_unsupported_model_fails_before_any_collection_work() -> Result<(), Box<
     fs::create_dir_all(&vault)?;
     fs::write(vault.join("a.md"), "borrowing rules")?;
 
-    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
     run(
         [
             "mdsearch",
             "collection",
-            "add",
+            "create",
             "Notes",
             path_argument(&vault)?,
         ],
         home.path(),
     )?;
     run(
-        [
-            "mdsearch",
-            "collection",
-            "update",
-            "Notes",
-            path_argument(&vault)?,
-        ],
+        ["mdsearch", "collection", "update", "--collection", "Notes"],
         home.path(),
     )?;
 
@@ -84,25 +77,18 @@ fn embed_uncached_model_suggests_download() -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(&vault)?;
     fs::write(vault.join("a.md"), "borrowing rules")?;
 
-    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
     run(
         [
             "mdsearch",
             "collection",
-            "add",
+            "create",
             "Notes",
             path_argument(&vault)?,
         ],
         home.path(),
     )?;
     run(
-        [
-            "mdsearch",
-            "collection",
-            "update",
-            "Notes",
-            path_argument(&vault)?,
-        ],
+        ["mdsearch", "collection", "update", "--collection", "Notes"],
         home.path(),
     )?;
 
@@ -124,25 +110,18 @@ fn embed_unsupported_reranker_fails() -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(&vault)?;
     fs::write(vault.join("a.md"), "borrowing rules")?;
 
-    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
     run(
         [
             "mdsearch",
             "collection",
-            "add",
+            "create",
             "Notes",
             path_argument(&vault)?,
         ],
         home.path(),
     )?;
     run(
-        [
-            "mdsearch",
-            "collection",
-            "update",
-            "Notes",
-            path_argument(&vault)?,
-        ],
+        ["mdsearch", "collection", "update", "--collection", "Notes"],
         home.path(),
     )?;
 
@@ -166,25 +145,18 @@ fn embed_uncached_reranker_suggests_download() -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(&vault)?;
     fs::write(vault.join("a.md"), "borrowing rules")?;
 
-    run(["mdsearch", "collection", "create", "Notes"], home.path())?;
     run(
         [
             "mdsearch",
             "collection",
-            "add",
+            "create",
             "Notes",
             path_argument(&vault)?,
         ],
         home.path(),
     )?;
     run(
-        [
-            "mdsearch",
-            "collection",
-            "update",
-            "Notes",
-            path_argument(&vault)?,
-        ],
+        ["mdsearch", "collection", "update", "--collection", "Notes"],
         home.path(),
     )?;
 
